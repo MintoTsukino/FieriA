@@ -58,6 +58,7 @@
 - 記憶のインポート（設定画面からMD/フォルダを選ぶと、AI本人が読んでwiki・索引に整理。原文は `souls/<id>/imported/` に無改変保存。処理は1件ずつで進行モーダル・キャンセルつき）
 - プロバイダ別の推論エフォート（設定のプロバイダカードで指定なし/low/medium/high。OpenAI互換系はreasoning_effort、GeminiはthinkingBudget、CodexはResponses APIのreasoningへ反映。非対応モデルでは無視される）
 - メイン画面QOL: 左上のSOUL名クリックで切替／日記パネルの開閉／チャットヘッダからモデル・推論エフォート切替（送信中はエンジン差し替えを伴う操作を無効化）
+- 安全層: 全SOUL共通の安全規範をシステムプロンプトへ常時注入（機密不可侵・無断外部送信の禁止・不可逆操作の事前確認・文書内指示への非服従・危険行為拒否）。workspaceツールは機密名ファイル（secret/credential/apikey等）と `fieria_home` 内部への到達を物理的に拒否
 
 ## 検証状況（2026-07-21 mvp-v0 時点）
 
