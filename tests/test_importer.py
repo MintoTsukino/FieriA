@@ -57,3 +57,19 @@ def test_stage_nonexistent_path_skipped():
     out = importer.stage_files(sid, ["Z:/存在しない/道.md"])
     assert out["staged"] == []
     assert out["skipped"] == ["Z:/存在しない/道.md"]
+
+
+def test_split_short_text_single_chunk():
+    assert importer._split_text("abc", limit=10) == ["abc"]
+
+
+def test_split_respects_line_boundaries():
+    text = "1234\n5678\nabcd\n"
+    chunks = importer._split_text(text, limit=10)
+    assert chunks == ["1234\n5678\n", "abcd\n"]
+    assert "".join(chunks) == text
+
+
+def test_split_oversized_single_line_kept_whole():
+    text = "x" * 25
+    assert importer._split_text(text, limit=10) == [text]

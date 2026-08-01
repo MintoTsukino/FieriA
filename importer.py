@@ -75,3 +75,22 @@ def stage_files(soul_id, paths):
         else:
             skipped.append(p)
     return {"ok": True, "staged": staged, "skipped": skipped}
+
+
+CHUNK_CHARS = 20000
+
+
+def _split_text(text, limit=CHUNK_CHARS):
+    """行境界で limit 文字以下のチャンクに割る。1行が limit を超える場合はその行を丸ごと1チャンクにする。"""
+    if len(text) <= limit:
+        return [text]
+    chunks, buf, size = [], [], 0
+    for line in text.splitlines(keepends=True):
+        if size + len(line) > limit and buf:
+            chunks.append("".join(buf))
+            buf, size = [], 0
+        buf.append(line)
+        size += len(line)
+    if buf:
+        chunks.append("".join(buf))
+    return chunks
