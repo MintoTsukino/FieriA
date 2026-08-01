@@ -91,15 +91,14 @@
   #role-menu .item:hover, #soul-menu .item:hover, #model-menu .item:hover { background: var(--bg2); }
   #role-menu .item.sep { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 12px; color: var(--fg-dim); }
 
-  #model-select { position: relative; }
   #model-current {
-    background: var(--bg2); border: 1px solid var(--line); color: var(--fg);
-    border-radius: var(--card-radius); padding: 6px 14px; cursor: pointer;
-    font-size: 13px;
+    background: none; border: none; color: var(--fg-dim);
+    padding: 2px 4px; cursor: pointer; font-size: 12px;
   }
+  #model-current:hover:not(:disabled) { color: var(--fg); }
   #model-current:disabled { opacity: .5; cursor: default; }
   #model-menu {
-    position: absolute; top: 40px; left: 0; z-index: 10;
+    position: absolute; bottom: 100%; left: 14px; margin-bottom: 6px; z-index: 10;
     background: var(--bg); border: 1px solid var(--line);
     border-radius: var(--card-radius); box-shadow: var(--shadow);
     min-width: 260px; padding: 6px; display: none;
@@ -116,10 +115,11 @@
      普段の操作導線としては地味に置く（頻繁に押すボタンではないため）。 */
   #break-btn, #side-toggle-btn {
     background: transparent; border: 1px solid var(--line);
-    color: var(--fg-dim); border-radius: var(--card-radius); padding: 6px 14px;
+    color: var(--fg-dim); border-radius: var(--card-radius);
     cursor: pointer; font-size: 13px;
   }
-  #break-btn { margin-left: auto; }
+  #break-btn { margin-left: auto; padding: 6px 14px; }
+  #side-toggle-btn { padding: 6px 10px; font-size: 14px; line-height: 1; }
   #break-btn:hover:not(:disabled), #side-toggle-btn:hover:not(:disabled) { background: var(--bg2); color: var(--fg); }
   #break-btn:disabled, #side-toggle-btn:disabled { opacity: .5; cursor: default; }
 
@@ -485,7 +485,8 @@
   .toggle-row input[type=checkbox] { width: 18px; height: 18px; }
 
   /* --- 右パネル --- */
-  #side { border-left: 1px solid var(--line); padding: 20px; overflow-y: auto; min-height: 0; }
+  #side { border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+  #side-scroll { flex: 1; overflow-y: auto; min-height: 0; padding: 20px; }
   #side h4 { font-size: 13px; color: var(--fg-dim); margin: 0 0 10px 0; font-weight: normal; }
   #side .card { padding: 14px; }
   #diary-body { white-space: pre-wrap; line-height: 1.7; font-size: 13px; }
@@ -495,6 +496,10 @@
   #side-files .file-group summary { cursor: pointer; padding: 6px 8px; color: var(--fg-dim); }
   #side-files .file-group summary:hover { color: var(--fg); }
   #side-files .file-group .file-item { padding-left: 20px; }
+  #side-model-bar {
+    position: relative; flex-shrink: 0;
+    border-top: 1px solid var(--line); padding: 6px 14px;
+  }
 
   /* --- モーダル --- */
   #modal-overlay {
@@ -578,12 +583,8 @@
         <span class="label">ロール</span>
         <button id="role-current">（未設定）</button>
         <div id="role-menu"></div>
-        <span id="model-select">
-          <button id="model-current" title="モデル・推論エフォートを切り替える">（未設定）</button>
-          <div id="model-menu"></div>
-        </span>
         <button id="break-btn" title="ここまでの文脈をリセットする（会話はログに残る）">区切り</button>
-        <button id="side-toggle-btn" title="日記パネルの表示を切り替える">日記▸</button>
+        <button id="side-toggle-btn" title="サイドバーを開閉">▸</button>
       </div>
       <div id="chat-log"></div>
       <div id="pet-widget" class="pet-idle pet-hidden" aria-hidden="true" title="コノハ">
@@ -917,10 +918,16 @@
 
   <!-- 右パネル -->
   <div id="side">
-    <h4 id="diary-title">日記</h4>
-    <div class="card"><div id="diary-body" class="empty">まだ書かれてない</div></div>
-    <h4>記憶ファイル</h4>
-    <div class="card" id="side-files"></div>
+    <div id="side-scroll">
+      <h4 id="diary-title">日記</h4>
+      <div class="card"><div id="diary-body" class="empty">まだ書かれてない</div></div>
+      <h4>記憶ファイル</h4>
+      <div class="card" id="side-files"></div>
+    </div>
+    <div id="side-model-bar">
+      <button id="model-current" title="モデル・推論エフォートを切り替える">（未設定）</button>
+      <div id="model-menu"></div>
+    </div>
   </div>
 </div>
 
@@ -2219,7 +2226,7 @@ function renderMarkdownToHtml(raw) {
   // --- 日記パネル開閉 ---
   $("side-toggle-btn").addEventListener("click", function () {
     var collapsed = $("app").classList.toggle("side-collapsed");
-    $("side-toggle-btn").textContent = collapsed ? "◂日記" : "日記▸";
+    $("side-toggle-btn").textContent = collapsed ? "◂" : "▸";
   });
 
   // --- 記憶ビュー ---
