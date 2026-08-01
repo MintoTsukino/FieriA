@@ -2025,8 +2025,18 @@ function renderMarkdownToHtml(raw) {
     });
   }
 
+  // role-menu/model-menu/soul-menuのトリガーはクリック時にstopPropagation()するため、
+  // documentのクローズハンドラが発火せず他メニューが開きっぱなしになりうる。
+  // 各トリガーのクリックハンドラ冒頭でこれを呼び、自分以外を閉じてから開閉判定に入る。
+  function closeAllDropdowns(exceptId) {
+    ["role-menu", "model-menu", "soul-menu"].forEach(function (id) {
+      if (id !== exceptId) $(id).classList.remove("open");
+    });
+  }
+
   $("role-current").addEventListener("click", function (e) {
     e.stopPropagation();
+    closeAllDropdowns("role-menu");
     $("role-menu").classList.toggle("open");
   });
   document.addEventListener("click", function () { $("role-menu").classList.remove("open"); });
@@ -2086,6 +2096,7 @@ function renderMarkdownToHtml(raw) {
         + (isActive ? " ・選択中" : "");
       if (!isActive) {
         item.addEventListener("click", function () {
+          if (sending) return;
           saveModelChange(function (draft) { draft.provider = name; });
         });
       }
@@ -2107,6 +2118,7 @@ function renderMarkdownToHtml(raw) {
       item.textContent = text + (isActive ? " ・選択中" : "");
       if (!isActive) {
         item.addEventListener("click", function () {
+          if (sending) return;
           saveModelChange(function (draft) {
             draft.providers = draft.providers || {};
             draft.providers[draft.provider] = draft.providers[draft.provider] || {};
@@ -2144,12 +2156,14 @@ function renderMarkdownToHtml(raw) {
   $("model-current").addEventListener("click", function (e) {
     e.stopPropagation();
     if (sending) return;
+    closeAllDropdowns("model-menu");
     var menu = $("model-menu");
     if (menu.classList.contains("open")) {
       menu.classList.remove("open");
       return;
     }
     window.pywebview.api.get_settings().then(function (data) {
+      if (sending) return;  // Promise解決待ちの間に送信が始まっていたらメニューを開かない
       modelMenuSettings = data;
       buildModelMenu(data);
       menu.classList.add("open");
@@ -2193,6 +2207,7 @@ function renderMarkdownToHtml(raw) {
   $("soul-name-label").addEventListener("click", function (e) {
     e.stopPropagation();
     if (sending) return;
+    closeAllDropdowns("soul-menu");
     var menu = $("soul-menu");
     // 開く直前に作り直す：rename等（switch_soulを経由しない変更）で名前が変わっていても
     // 次に開いたときは最新のstate.soulsを反映する。
@@ -3175,6 +3190,7 @@ function renderMarkdownToHtml(raw) {
     }).then(function (data) {
       state.settings = data;
       renderProviderCard();
+      applyModelFromSettings(data);
       showToast("プロバイダ設定を保存した");
     }).catch(function (err) {
       showToast("保存に失敗した: " + err, "error");
