@@ -476,6 +476,28 @@
     border-radius: 10px; padding: 6px 14px; cursor: pointer; color: var(--fg);
   }
 
+  /* --- インポート進行モーダル --- */
+  #import-modal {
+    display: none; position: fixed; inset: 0; background: var(--overlay);
+    align-items: center; justify-content: center; z-index: 100;
+  }
+  #import-modal.open { display: flex; }
+  #import-modal .box {
+    background: var(--bg); color: var(--fg); border-radius: var(--card-radius);
+    padding: 20px; width: min(520px, 90vw);
+  }
+  #import-modal h3 { margin: 0 0 14px 0; font-size: 15px; }
+  #import-modal p { line-height: 1.7; }
+  #import-modal .row { display: flex; align-items: center; gap: 10px; margin: 14px 0 0; }
+  #import-modal button {
+    background: var(--accent); color: var(--accent-fg); border: none; border-radius: 10px;
+    padding: 8px 16px; font-size: 13px; cursor: pointer;
+  }
+  #import-modal button.ghost { background: none; color: var(--fg-dim); border: 1px solid var(--line); }
+  #import-bar-track { height: 6px; background: var(--line); border-radius: 99px; overflow: hidden; margin: 10px 0; }
+  #import-bar-fill { height: 100%; width: 0%; background: var(--accent); }
+  #import-log { max-height: 180px; overflow-y: auto; font-size: 12px; margin: 8px 0; }
+
   #boot-guard {
     position: fixed; inset: 0; background: var(--bg); display: flex;
     align-items: center; justify-content: center; flex-direction: column; gap: 16px;
@@ -820,6 +842,19 @@
         <div class="hint">選んだzipの内容で復元します（復元前の状態は自動でバックアップされます。zipに無い既存SOULは残ります）</div>
       </div>
 
+      <div class="card" id="import-block">
+        <h3>記憶のインポート</h3>
+        <div class="hint">Markdown（.md / .markdown / .txt）を渡すと、AI本人が読んでwikiと索引に整理する。原文は souls/…/imported/ に無改変で保存される。</div>
+        <div class="row">
+          <button id="import-pick-files-btn">ファイルを選ぶ</button>
+          <button id="import-pick-folder-btn">フォルダを選ぶ</button>
+          <span id="import-inbox-count" class="hint"></span>
+        </div>
+        <div class="row">
+          <button id="import-run-btn">インポート実行</button>
+        </div>
+      </div>
+
       <div class="card" id="scheduler-card">
         <h3>定期処理</h3>
         <div id="scheduler-list"></div>
@@ -846,6 +881,29 @@
     <div id="modal-title"></div>
     <div id="modal-body"></div>
     <button id="modal-close">閉じる</button>
+  </div>
+</div>
+
+<div id="import-modal">
+  <div class="box">
+    <h3>記憶のインポート</h3>
+    <div id="import-confirm-pane">
+      <p><b id="import-total-label">0</b> 件のファイルを処理します。<br>
+         1件ずつAIに読ませるため、<b>件数に応じた時間とAPIコスト</b>がかかります。</p>
+      <div class="row">
+        <button id="import-confirm-btn">開始する</button>
+        <button id="import-close-btn" class="ghost">やめる</button>
+      </div>
+    </div>
+    <div id="import-progress-pane" style="display:none;">
+      <div id="import-bar-track"><div id="import-bar-fill"></div></div>
+      <div id="import-current" class="hint"></div>
+      <div id="import-log"></div>
+      <div class="row">
+        <button id="import-cancel-btn" class="ghost">キャンセル</button>
+        <button id="import-done-btn" style="display:none;">閉じる</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -3009,6 +3067,87 @@ function renderMarkdownToHtml(raw) {
     });
   });
 
+  // ---- 記憶のインポート ----
+  function refreshImportCount() {
+    window.pywebview.api.get_import_status().then(function (st) {
+      $("import-inbox-count").textContent =
+        st.count > 0 ? "待機中: " + st.count + "件" : "";
+    });
+  }
+
+  $("import-pick-files-btn").addEventListener("click", function () {
+    window.pywebview.api.pick_and_stage_import_files().then(function (out) {
+      if (out.error) { showToast(out.error, "error"); return; }
+      refreshImportCount();
+    });
+  });
+
+  $("import-pick-folder-btn").addEventListener("click", function () {
+    window.pywebview.api.pick_and_stage_import_folder().then(function (out) {
+      if (out.error) { showToast(out.error, "error"); return; }
+      refreshImportCount();
+    });
+  });
+
+  $("import-run-btn").addEventListener("click", function () {
+    window.pywebview.api.get_import_status().then(function (st) {
+      if (st.count === 0) { showToast("先にファイルかフォルダを選んで", "error"); return; }
+      $("import-total-label").textContent = st.count;
+      $("import-confirm-pane").style.display = "";
+      $("import-progress-pane").style.display = "none";
+      $("import-modal").classList.add("open");
+    });
+  });
+
+  $("import-close-btn").addEventListener("click", function () {
+    $("import-modal").classList.remove("open");
+  });
+
+  $("import-confirm-btn").addEventListener("click", function () {
+    window.pywebview.api.start_import().then(function (out) {
+      if (out.error) { showToast(out.error, "error"); return; }
+      $("import-confirm-pane").style.display = "none";
+      $("import-progress-pane").style.display = "";
+      $("import-log").textContent = "";
+      $("import-current").textContent = "";
+      $("import-bar-fill").style.width = "0%";
+      $("import-cancel-btn").style.display = "";
+      $("import-done-btn").style.display = "none";
+    });
+  });
+
+  $("import-cancel-btn").addEventListener("click", function () {
+    window.pywebview.api.cancel_import();
+    $("import-current").textContent = "キャンセル要求——このファイルが終わったら止まる";
+  });
+
+  $("import-done-btn").addEventListener("click", function () {
+    $("import-modal").classList.remove("open");
+    refreshImportCount();
+  });
+
+  window.onImportProgress = function (p) {
+    var log = $("import-log");
+    if (p.kind === "file_start") {
+      $("import-current").textContent =
+        (p.index + 1) + "/" + p.total + " " + p.file + " を整理中…";
+    } else if (p.kind === "file_done") {
+      $("import-bar-fill").style.width =
+        Math.round((p.index + 1) / p.total * 100) + "%";
+      var line = document.createElement("div");
+      line.textContent = (p.ok ? "✓ " : "✗ ") + p.file + (p.ok ? "" : " — " + p.detail);
+      log.appendChild(line);
+      log.scrollTop = log.scrollHeight;
+    } else if (p.kind === "done") {
+      var msg = "完了: " + p.done + "/" + p.total;
+      if (p.stopped) msg += "（キャンセルで停止）";
+      if (p.failed && p.failed.length) msg += "／失敗 " + p.failed.length + "件（inboxに残っています）";
+      $("import-current").textContent = msg;
+      $("import-cancel-btn").style.display = "none";
+      $("import-done-btn").style.display = "";
+    }
+  };
+
   function loadSettings() {
     window.pywebview.api.get_settings().then(function (data) {
       state.settings = data;
@@ -3022,6 +3161,7 @@ function renderMarkdownToHtml(raw) {
       renderThemeCard();
       renderProviderCard();
       renderApiKeyList();
+      refreshImportCount();
     });
     renderScheduledJobs();
   }
