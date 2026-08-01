@@ -206,6 +206,7 @@ class Bridge:
             "pet_size": self._cfg.get("pet_size", 64),
             "pet_character": self._cfg.get("pet_character", "konoha"),
             "pet_pos": self._cfg.get("pet_pos", {"right": 20, "bottom": 92}),
+            "reply_se": self._cfg.get("reply_se", "se-poko.mp3"),
             # 今日の会話ログ（表示専用の復元用）。engine.messagesには入れない＝
             # LLMへ渡す会話コンテキストは増やさない（設計判断: 今日の発言量が多いほど
             # APIコストが増えるトレードオフを許容するかは未確定のため、画面表示のみに留める）。
@@ -463,6 +464,7 @@ class Bridge:
             "pet_size": self._cfg.get("pet_size", 64),
             "pet_character": self._cfg.get("pet_character", "konoha"),
             "streaming": self._cfg.get("streaming", True),
+            "reply_se": self._cfg.get("reply_se", "se-poko.mp3"),
         }
 
     def save_settings(self, payload):
@@ -519,6 +521,10 @@ class Bridge:
             self._cfg["pet_character"] = val if val in ("konoha", "mokora") else "konoha"
         if "streaming" in payload:
             self._cfg["streaming"] = bool(payload["streaming"])
+        if "reply_se" in payload:
+            # 不正値は既定("se-poko.mp3")ではなく""へ倒す（鳴らない方に倒す＝安全側）。
+            val = payload["reply_se"]
+            self._cfg["reply_se"] = val if val in config_mod.REPLY_SE_CHOICES else ""
         config_mod.save_config(self._cfg)
         self._env = load_env()
         self._ensure_engine()

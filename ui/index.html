@@ -770,6 +770,19 @@
         <div class="hint" style="margin-top:4px;">
           ※フォールバックプロバイダを設定している場合、ONでも一括表示になる（切替の安全性を優先する仕様）
         </div>
+        <div class="row" style="margin-top:12px;">
+          <label>返信音</label>
+          <select id="reply-se-select">
+            <option value="">なし</option>
+            <option value="se-kachi.mp3">カチッ（メカニカル）</option>
+            <option value="se-poyo.mp3">ぽよっ（バブル）</option>
+            <option value="se-koto.mp3">コトッ（キースイッチ）</option>
+            <option value="se-pofun.mp3">ぽふん（チャイム）</option>
+            <option value="se-poko.mp3">ぽこっ（マリンバ）</option>
+            <option value="se-pichon.mp3">ぴちょん（しずく）</option>
+          </select>
+        </div>
+        <div class="hint">LLMの返信が届いたときに鳴る音。選ぶとすぐ試し鳴らしする</div>
       </div>
 
       <div class="card" id="provider-card">
@@ -1120,7 +1133,7 @@ function renderMarkdownToHtml(raw) {
 (function () {
   var state = {
     souls: [], roles: [], active_soul: null, active_role: null, fact_layer: null,
-    settings: null, theme: "light", pet_enabled: true, pet_skins: {},
+    settings: null, theme: "light", pet_enabled: true, pet_skins: {}, replySe: "se-poko.mp3",
   };
 
   function applyTheme(theme) {
@@ -1209,6 +1222,7 @@ function renderMarkdownToHtml(raw) {
     var savedPos = data.pet_pos || {};
     setPetPos(savedPos.right != null ? savedPos.right : 20,
       savedPos.bottom != null ? savedPos.bottom : 92);
+    state.replySe = data.reply_se || "";
 
     var soulObj = state.souls.find(function (s) { return s.id === state.active_soul; });
     $("soul-name-label").textContent = soulObj ? soulObj.name : "SOUL未選択";
@@ -1942,6 +1956,7 @@ function renderMarkdownToHtml(raw) {
         return;
       }
       setPetState(petStateAfterTurn(result));
+      playReplySe();
       var row = addBubble("ai", result.reply || "");
       addOperations(row, result.operations);
       // AIがswitch_roleツールで自分から切り替えていたら、ロールバー表示を更新する
@@ -2989,6 +3004,23 @@ function renderMarkdownToHtml(raw) {
     if (!state.settings) return;
     $("theme-select").value = state.settings.theme || "light";
     $("streaming-enabled-checkbox").checked = state.settings.streaming !== false;
+    $("reply-se-select").value = state.settings.reply_se || "";
+  }
+
+  // FieriA拡張: LLM返信完了時のSE。state.replySeはboot()または設定変更時に更新され、
+  // 設定画面を開いていなくてもチャット側で鳴らせるよう単独で保持する。
+  // Audio再生の失敗（未対応ブラウザ・連打での再生中断等）はチャットを壊さないよう握る。
+  function playReplySe() {
+    try {
+      var file = state.replySe;
+      if (!file) return;
+      var audio = new Audio("se/" + file);
+      audio.volume = 0.5;
+      var p = audio.play();
+      if (p && typeof p.catch === "function") p.catch(function () {});
+    } catch (e) {
+      // 再生失敗は無視（チャット動作を優先）
+    }
   }
 
   $("theme-select").addEventListener("change", function () {
@@ -3012,6 +3044,22 @@ function renderMarkdownToHtml(raw) {
       state.settings = data;
       renderThemeCard();
       showToast("ストリーミング表示の設定を保存した");
+    }).catch(function (err) {
+      showToast("保存に失敗した: " + err, "error");
+    });
+  });
+
+  // FieriA拡張: LLM返信完了時のSE選択。web-search-checkboxと同じ即時保存パターンだが、
+  // 選んだ瞬間にそのSEを試し鳴らしする点が異なる（値を先に反映してからplayReplySe）。
+  $("reply-se-select").addEventListener("change", function () {
+    var payload = { reply_se: $("reply-se-select").value };
+    state.replySe = payload.reply_se;
+    playReplySe();
+    window.pywebview.api.save_settings(payload).then(function (data) {
+      state.settings = data;
+      state.replySe = data.reply_se || "";
+      renderThemeCard();
+      showToast("返信音の設定を保存した");
     }).catch(function (err) {
       showToast("保存に失敗した: " + err, "error");
     });

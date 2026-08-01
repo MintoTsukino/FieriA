@@ -1458,3 +1458,52 @@ def test_boot_llm_summary_safe_on_broken_config():
     data = b.boot()
     assert data["llm_summary"] == {"provider": "", "label": "", "model": "",
                                    "reasoning_effort": ""}
+
+
+# --- LLM返信完了時のSE: get_settings/save_settings/boot への reply_se追加 ---
+# 2026-08-02追加。pet_character（不正値は既定へ倒す）とは異なり、不正値・空文字は
+# 「鳴らさない」("")へ倒す（安全側＝鳴らない方に倒す）。
+
+
+def test_get_settings_includes_reply_se_default_se_poko():
+    import gui
+    bridge = gui.Bridge()
+    assert bridge.get_settings()["reply_se"] == "se-poko.mp3"
+
+
+def test_save_settings_persists_reply_se():
+    import gui
+    import config as config_mod
+    bridge = gui.Bridge()
+
+    result = bridge.save_settings({"reply_se": "se-kachi.mp3"})
+
+    assert result["reply_se"] == "se-kachi.mp3"
+    reloaded = config_mod.load_config()
+    assert reloaded["reply_se"] == "se-kachi.mp3"
+
+
+def test_save_settings_reply_se_accepts_empty_string_as_no_sound():
+    import gui
+    bridge = gui.Bridge()
+
+    result = bridge.save_settings({"reply_se": ""})
+
+    assert result["reply_se"] == ""
+
+
+def test_save_settings_reply_se_falls_back_to_empty_on_invalid_value():
+    """不正値は既定のse-poko.mp3ではなく""へ倒す（鳴らない方に倒す＝安全側）。"""
+    import gui
+    bridge = gui.Bridge()
+
+    result = bridge.save_settings({"reply_se": "../../etc/passwd"})
+
+    assert result["reply_se"] == ""
+
+
+def test_boot_includes_reply_se():
+    import gui
+    bridge = gui.Bridge()
+    bridge._cfg["reply_se"] = "se-pichon.mp3"
+    assert bridge.boot()["reply_se"] == "se-pichon.mp3"

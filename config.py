@@ -272,7 +272,15 @@ DEFAULT_CONFIG = {
     # FieriA拡張: ストリーミング。AI応答の文字を逐次表示するか（既定True）。
     # OFFなら従来どおり全文完成後に一括表示（gui.send_messageがon_delta=Noneで渡す）。
     "streaming": True,
+    # LLM返信完了時の効果音。ファイルは ui/se/ に同梱（値はそのファイル名、""=鳴らさない）
+    "reply_se": "se-poko.mp3",
 }
+
+# LLM返信完了時の効果音。ファイルは ui/se/ に同梱（値はそのファイル名、""=鳴らさない）
+REPLY_SE_CHOICES = (
+    "", "se-kachi.mp3", "se-poyo.mp3", "se-koto.mp3",
+    "se-pofun.mp3", "se-poko.mp3", "se-pichon.mp3",
+)
 
 
 def load_config():

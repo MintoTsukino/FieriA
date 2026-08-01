@@ -886,3 +886,43 @@ def test_load_config_backfills_missing_pet_character():
     config.save_config(cfg)
     reloaded = config.load_config()
     assert reloaded["pet_character"] == "konoha"
+
+
+def test_default_reply_se_is_se_poko():
+    config = _fresh_config()
+    cfg = config.load_config()
+    assert cfg["reply_se"] == "se-poko.mp3"
+
+
+def test_load_config_backfills_missing_reply_se_without_overwriting_others():
+    config = _fresh_config()
+    cfg = config.load_config()
+    del cfg["reply_se"]
+    cfg["active_soul"] = "soul-1"
+    config.save_config(cfg)
+
+    reloaded = config.load_config()
+    assert reloaded["reply_se"] == "se-poko.mp3"
+    assert reloaded["active_soul"] == "soul-1"
+
+    with open(config.CONFIG_PATH, "r", encoding="utf-8") as f:
+        on_disk = json.load(f)
+    assert on_disk["reply_se"] == "se-poko.mp3"
+
+
+def test_load_config_preserves_explicit_reply_se():
+    config = _fresh_config()
+    cfg = config.load_config()
+    cfg["reply_se"] = "se-kachi.mp3"
+    config.save_config(cfg)
+
+    reloaded = config.load_config()
+    assert reloaded["reply_se"] == "se-kachi.mp3"
+
+
+def test_reply_se_choices_contains_all_six_files_and_empty():
+    config = _fresh_config()
+    assert config.REPLY_SE_CHOICES == (
+        "", "se-kachi.mp3", "se-poyo.mp3", "se-koto.mp3",
+        "se-pofun.mp3", "se-poko.mp3", "se-pichon.mp3",
+    )
