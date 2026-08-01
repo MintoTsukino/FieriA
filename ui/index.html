@@ -2283,6 +2283,12 @@ function renderMarkdownToHtml(raw) {
   // 開いていない状態でもここ単体で保存が成立する（ブリーフィングの要件）。
   var modelMenuSettings = null;
 
+  // buildModelMenu()を呼ぶたびに増分するメニューの世代カウンタ。list_models()の
+  // 非同期応答が返ってきた時点でこれと食い違っていれば、メニューが閉じ直された/
+  // 再オープンされた/プロバイダが切り替わった後の古い結果なので描画しない
+  // （設定画面のidentityRequestSeqと同じレースガードの考え方）。
+  var modelMenuBuildSeq = 0;
+
   function modelLabelText(providerLabel, model, effort) {
     if (!providerLabel && !model) return "（未設定）";
     var text = (providerLabel || "") + " / " + (model || "");
@@ -2337,6 +2343,66 @@ function renderMarkdownToHtml(raw) {
         });
       }
       menu.appendChild(item);
+    });
+
+    // --- モデル節（現在プロバイダの保存済みモデル一覧から切替。設定画面の
+    //     list_models配線を流用し、メニューを開くたびに非同期で取得し直す） ---
+    var modelSectionLabel = document.createElement("div");
+    modelSectionLabel.className = "section-label sep";
+    modelSectionLabel.textContent = "モデル";
+    menu.appendChild(modelSectionLabel);
+
+    var modelListContainer = document.createElement("div");
+    menu.appendChild(modelListContainer);
+
+    var currentProviderName = llm.provider;
+    var currentModelName = ((providers[currentProviderName] || {}).model) || "";
+
+    var loadingItem = document.createElement("div");
+    loadingItem.className = "item active-tag";
+    loadingItem.textContent = "（モデル一覧を読み込み中…）";
+    modelListContainer.appendChild(loadingItem);
+
+    function renderModelListFallback() {
+      modelListContainer.innerHTML = "";
+      var errItem = document.createElement("div");
+      errItem.className = "item active-tag";
+      errItem.textContent = "一覧を取得できない（設定画面から手入力できる）";
+      modelListContainer.appendChild(errItem);
+      var curItem = document.createElement("div");
+      curItem.className = "item active-tag";
+      curItem.textContent = "現在のモデル: " + (currentModelName || "（未設定）");
+      modelListContainer.appendChild(curItem);
+    }
+
+    var mySeq = ++modelMenuBuildSeq;
+    window.pywebview.api.list_models(currentProviderName).then(function (res) {
+      if (mySeq !== modelMenuBuildSeq) return;  // 待機中にメニュー再オープン/プロバイダ切替→古い応答は破棄
+      if (!res || !res.ok || !res.models || !res.models.length) {
+        renderModelListFallback();
+        return;
+      }
+      modelListContainer.innerHTML = "";
+      res.models.forEach(function (m) {
+        var isActive = m === currentModelName;
+        var item = document.createElement("div");
+        item.className = "item" + (isActive ? " active-tag" : "");
+        item.textContent = m + (isActive ? " ・選択中" : "");
+        if (!isActive) {
+          item.addEventListener("click", function () {
+            if (sending) return;
+            saveModelChange(function (draft) {
+              draft.providers = draft.providers || {};
+              draft.providers[draft.provider] = draft.providers[draft.provider] || {};
+              draft.providers[draft.provider].model = m;
+            });
+          });
+        }
+        modelListContainer.appendChild(item);
+      });
+    }).catch(function () {
+      if (mySeq !== modelMenuBuildSeq) return;
+      renderModelListFallback();
     });
 
     var effortLabel = document.createElement("div");
