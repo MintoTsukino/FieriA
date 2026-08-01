@@ -178,3 +178,12 @@ def test_codex_chat_omits_reasoning_key_when_effort_unset(monkeypatch):
     provider = llm.CodexOAuthLLM({"model": "gpt-5.5"}, temperature=0.8, max_tokens=2000)
     provider.chat([{"role": "user", "content": "hi"}])
     assert "reasoning" not in captured["payload"]
+
+
+def test_entry_explicit_empty_effort_overrides_global():
+    """entryに空文字（UIの「指定なし」）が明示されていれば、旧グローバルキーに落ちない。"""
+    cfg = {"provider": "opencode_go", "reasoning_effort": "high", "providers": {
+        "opencode_go": {"type": "openai_compat", "base_url": "http://x/v1",
+                        "model": "m", "env_key": "K", "reasoning_effort": ""}}}
+    inst = llm.create_llm(cfg, {"K": "dummy"})
+    assert inst.reasoning_effort == ""

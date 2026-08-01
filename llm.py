@@ -796,8 +796,12 @@ def create_llm(llm_cfg, env, on_log=None):
     max_tokens = int(llm_cfg.get("max_tokens", 400))
 
     def _effort_for(entry):
-        # プロバイダentry個別の指定を優先し、無ければllm直下（旧・手書き互換）に落ちる
-        return ((entry.get("reasoning_effort") or llm_cfg.get("reasoning_effort", "") or "")).strip()
+        # プロバイダentry個別の指定を優先し、キー自体が無いときだけllm直下
+        # （旧・手書き互換）に落ちる。空文字はUIの「指定なし」という明示的な
+        # 選択なので、グローバル値で上書きしない。
+        if "reasoning_effort" in entry:
+            return (entry.get("reasoning_effort") or "").strip()
+        return (llm_cfg.get("reasoning_effort", "") or "").strip()
 
     # FieriA拡張: Web検索。llm直下のグローバルトグル（プロバイダ個別のproviders[name]
     # ではない）なので、プライマリ・フォールバック両方の構築に同じ値を渡す。
