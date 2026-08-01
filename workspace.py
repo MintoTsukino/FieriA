@@ -7,6 +7,8 @@ soul.pyの_safe_pathと同方式のトラバーサル拒否に加え、拡張子
 """
 import os
 
+import config
+
 ALLOWED_EXTS = (".md", ".txt", ".html", ".css", ".js", ".json", ".py")
 # list_docsの列挙対象だけ.pdfも含める（read_pdf_bytesで見るため）。
 # write_doc/append_doc/read_doc（テキスト読み書き）の対象拡張子はALLOWED_EXTSのまま変えない。
@@ -15,9 +17,34 @@ LISTABLE_EXTS = ALLOWED_EXTS + (".pdf",)
 MAX_PDF_BYTES = 14 * 1024 * 1024  # 14MB（gui.pdf_native_supported/Gemini直読みのraw上限と揃える）
 
 
+# ファイル名ベースの機密判定。拡張子ホワイトリストを通る名前（secrets.json等）を
+# 名指しで塞ぐ。誤爆（secretary.md等）は安全側に倒す設計判断（2026-08-02）
+_SENSITIVE_NAME_PARTS = ("oauth", "secret", "credential", "apikey", "api_key")
+
+
+def _is_sensitive_name(name):
+    # NFKC正規化はしない＝全角ｓｅｃｒｅｔ等の互換等価文字は素通りする。
+    # 実害小（作業フォルダは基本的に人間かFieria自身が作るファイル名で、全角化した
+    # 攻撃的なファイル名を置く動機が薄い）と割り切った設計判断（2026-08-02レビュー）。
+    low = name.lower()
+    return any(p in low for p in _SENSITIVE_NAME_PARTS)
+
+
+def _is_inside_fieria_home(full_path):
+    """full_path（絶対パス）が実パス比較でfieria_home（config.HOME）自体、または
+    その配下に到達しているかを判定する。シンボリックリンク/ジャンクション経由の
+    到達も実パス解決で検知する。_resolve_safe_path（read/write系）と
+    _iter_listable_files（list_docs/search_workspace系）の両方から呼ぶ共通判定
+    （2026-08-02: 一覧・検索がfieria_home到達拒否から漏れていたレビュー指摘の修正）。"""
+    real_full = os.path.realpath(full_path)
+    real_home = os.path.realpath(config.HOME)
+    return real_full == real_home or real_full.startswith(real_home + os.sep)
+
+
 def _resolve_safe_path(workspace_dir, rel_path):
-    """コロン拒否・隠しパス拒否・トラバーサル拒否の共通検査（拡張子検査はしない）。
-    _safe_path（テキスト系）とread_pdf_bytes（.pdf限定）の両方から使う。"""
+    """コロン拒否・隠しパス拒否・トラバーサル拒否・機密名拒否・fieria_home到達拒否の
+    共通検査（拡張子検査はしない）。_safe_path（テキスト系）とread_pdf_bytes（.pdf限定）
+    の両方から使う。"""
     base = os.path.abspath(workspace_dir)
     # rel_pathは常に相対パスのはずなので、コロンが含まれる時点で不正とみなす。
     # （NTFS代替データストリーム "hidden.exe:x.md" は拡張子チェックを文字列末尾一致で
@@ -33,6 +60,14 @@ def _resolve_safe_path(workspace_dir, rel_path):
     full = os.path.abspath(os.path.join(base, rel_path))
     if not full.startswith(base + os.sep) and full != base:
         raise ValueError(f"作業フォルダの外は触れない: {rel_path}")
+    # .json解禁に伴う安全弁: OAuth/秘密鍵/認証情報っぽい名前のファイルが作業フォルダに
+    # 置かれていても読み書きさせない（.envは拡張子検査で既に弾かれている）。
+    if _is_sensitive_name(os.path.basename(full)):
+        raise ValueError(f"機密ファイル類には触れない: {rel_path}")
+    # 作業フォルダがシンボリックリンク等でfieria_home（会話ログ・記憶・config.json等の
+    # 内部データ）に到達していないかを実パスで確認する（2026-08-02追加の物理拒否）。
+    if _is_inside_fieria_home(full):
+        raise ValueError(f"FieriAの内部データ（fieria_home）には触れない: {rel_path}")
     return full
 
 
@@ -40,10 +75,6 @@ def _safe_path(workspace_dir, rel_path):
     full = _resolve_safe_path(workspace_dir, rel_path)
     if not full.lower().endswith(ALLOWED_EXTS):
         raise ValueError(f"許可されていない拡張子: {rel_path}")
-    # .json解禁に伴う安全弁: OAuthトークン類（xai_oauth.json等）が作業フォルダに
-    # 置かれていても読み書きさせない。.envは拡張子検査で既に弾かれている。
-    if "oauth" in os.path.basename(full).lower():
-        raise ValueError(f"認証トークン類には触れない: {rel_path}")
     return full
 
 
@@ -81,16 +112,25 @@ def _iter_listable_files(base, state=None):
     state（_FileWalkStateインスタンス）を渡すと、打ち切り発生時にstate.truncated=Trueが立つ。"""
     count = 0
     for root, dirs, files in os.walk(base):
-        dirs[:] = [d for d in dirs if not d.startswith(".")]
+        dirs[:] = [
+            d for d in dirs
+            if not d.startswith(".") and not _is_inside_fieria_home(os.path.join(root, d))
+        ]  # 隠しフォルダに加え、fieria_home（シンボリックリンク/ジャンクション経由含む）へ
+        # 到達するサブフォルダもここで枝刈りする（_resolve_safe_pathのHOME到達拒否と対称。
+        # 2026-08-02: 一覧・検索がread/writeと非対称に内部データを漏らしていたレビュー指摘の修正）
         rel_root = os.path.relpath(root, base)
         depth = 0 if rel_root == "." else rel_root.count(os.sep) + 1
         if depth >= MAX_LIST_DEPTH:
             dirs[:] = []  # これ以上深くは降りない（現在の階層のファイルは拾う）
+        if _is_inside_fieria_home(root):
+            continue  # workspace_dir自体がfieria_home（またはその配下）を指すケースの防波堤
         for f in files:
             if f.lower().endswith(LISTABLE_EXTS):
-                if "oauth" in f.lower():
-                    continue  # _safe_pathの認証トークン拒否と対称（見せない・触らせない）
+                if _is_sensitive_name(f):
+                    continue  # _resolve_safe_pathの機密名拒否と対称（見せない・触らせない）
                 full = os.path.join(root, f)
+                if _is_inside_fieria_home(full):
+                    continue  # 個々のファイル単位でも二重に確認（実パス解決の取りこぼし対策）
                 rel = os.path.relpath(full, base).replace("\\", "/")
                 yield rel, full
                 count += 1

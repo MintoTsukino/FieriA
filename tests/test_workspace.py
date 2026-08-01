@@ -660,3 +660,82 @@ def test_py_files_can_be_read_written_and_listed(tmp_path):
     ws.write_doc(str(tmp_path), "script.py", "print('hi')\n")
     assert "print('hi')" in ws.read_doc(str(tmp_path), "script.py")
     assert any(d.startswith("script.py") for d in ws.list_docs(str(tmp_path)))
+
+
+def test_sensitive_named_files_are_rejected_and_hidden(tmp_path):
+    """機密名（oauth/secret/credential/apikey/api_key）を含むファイル名は読み書き拒否・
+    一覧非表示・検索対象外（2026-08-02: oauthのみだった判定を拡張）。"""
+    import pytest
+    import workspace as ws
+    names = ["secrets.json", "my-credentials.json", "apikey.txt", "api_key.md"]
+    for name in names:
+        (tmp_path / name).write_text("dummy-not-real", encoding="utf-8")
+
+    for name in names:
+        with pytest.raises(ValueError, match="機密ファイル類には触れない"):
+            ws.read_doc(str(tmp_path), name)
+        with pytest.raises(ValueError, match="機密ファイル類には触れない"):
+            ws.write_doc(str(tmp_path), name, "x")
+
+    docs = ws.list_docs(str(tmp_path))
+    for name in names:
+        assert not any(d.startswith(name) for d in docs)
+    hits = ws.search_workspace(str(tmp_path), "dummy")
+    for name in names:
+        assert not any(h.startswith(name) for h in hits)
+
+
+def test_sensitive_name_substring_false_positive_is_accepted_by_design(tmp_path):
+    """secretary.md のようなサブストリング誤爆も安全側に倒して拒否する
+    （意図的な仕様固定。誤爆を許容してでも機密ファイルの取りこぼしを避ける）。"""
+    import pytest
+    import workspace as ws
+    (tmp_path / "secretary.md").write_text("議事録", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="機密ファイル類には触れない"):
+        ws.read_doc(str(tmp_path), "secretary.md")
+    assert not any(d.startswith("secretary.md") for d in ws.list_docs(str(tmp_path)))
+
+
+def test_workspace_dir_inside_fieria_home_rejects_config_json_read():
+    """workspace_dirをFIERIA_HOME配下に向けても、config.json（FieriAの内部データ）の
+    読みは拒否される（2026-08-02追加のfieria_home到達物理拒否）。テスト隔離済みの
+    FIERIA_HOME（conftest.py）を直接workspace_dirとして使う。"""
+    import pytest
+    import config
+    import workspace as ws
+    config.save_config(config.load_config())  # config.jsonが確実に存在する状態にする
+
+    with pytest.raises(ValueError, match="FieriAの内部データ"):
+        ws.read_doc(config.HOME, "config.json")
+
+
+def test_oauth_named_files_are_rejected_and_hidden_still_passes(tmp_path):
+    """既存のoauth拒否テストが機密名判定の統合後も引き続きパスすることの確認
+    （test_oauth_named_files_are_rejected_and_hiddenと同内容の再確認）。"""
+    import pytest
+    import workspace as ws
+    secret = tmp_path / "xai_oauth.json"
+    secret.write_text('{"access_token": "dummy-not-real"}', encoding="utf-8")
+    with pytest.raises(ValueError):
+        ws.read_doc(str(tmp_path), "xai_oauth.json")
+    with pytest.raises(ValueError):
+        ws.write_doc(str(tmp_path), "xai_oauth.json", "x")
+    assert not any("oauth" in d.lower() for d in ws.list_docs(str(tmp_path)))
+    assert not any("oauth" in h.lower() for h in ws.search_workspace(str(tmp_path), "dummy"))
+
+
+def test_list_and_search_hide_fieria_home_contents():
+    """workspace_dirをfieria_home自体に向けても、一覧・検索が内部データを漏らさない
+    （read_docの拒否と対称）。レビューで発見された情報漏洩経路の回帰テスト。"""
+    import os
+    import config
+    import workspace as ws
+    inner = os.path.join(config.HOME, "diary_leak_check.md")
+    with open(inner, "w", encoding="utf-8") as f:
+        f.write("confidential diary content ABC999\n")
+    try:
+        assert ws.list_docs(config.HOME) == []
+        assert ws.search_workspace(config.HOME, "ABC999") == []
+    finally:
+        os.remove(inner)
