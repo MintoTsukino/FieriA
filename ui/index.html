@@ -487,9 +487,8 @@
   /* --- 右パネル --- */
   #side { border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
   #side-scroll { flex: 1; overflow-y: auto; min-height: 0; padding: 20px; }
-  #side h4 { font-size: 13px; color: var(--fg-dim); margin: 0 0 10px 0; font-weight: normal; }
-  #diary-title { font-size: 13px; color: var(--fg-dim); font-weight: normal; margin: 0 0 10px 0; cursor: pointer; }
-  #diary-title:hover { color: var(--fg); }
+  #diary-title, #side-files-title { font-size: 13px; color: var(--fg-dim); font-weight: normal; margin: 0 0 10px 0; cursor: pointer; }
+  #diary-title:hover, #side-files-title:hover { color: var(--fg); }
   #side .card { padding: 14px; }
   #diary-body { white-space: pre-wrap; line-height: 1.7; font-size: 13px; }
   #diary-body.empty { color: var(--fg-dim); }
@@ -566,6 +565,17 @@
   }
   #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   #toast.error { border: 1px solid var(--danger); color: var(--danger); }
+
+  /* --- 右クリックのコピペメニュー（pywebviewは標準コンテキストメニューが出ないため自前実装） --- */
+  #context-menu {
+    display: none; position: fixed; z-index: 150;
+    background: var(--bg2); border: 1px solid var(--line);
+    border-radius: var(--card-radius); box-shadow: var(--shadow);
+    min-width: 140px; padding: 6px;
+  }
+  #context-menu.open { display: block; }
+  #context-menu .item { padding: 10px 12px; border-radius: 10px; cursor: pointer; font-size: 14px; }
+  #context-menu .item:hover { background: var(--bg); }
 </style>
 
 <div id="app">
@@ -925,8 +935,10 @@
         <summary id="diary-title">日記</summary>
         <div class="card"><div id="diary-body" class="empty">まだ書かれてない</div></div>
       </details>
-      <h4>記憶ファイル</h4>
-      <div class="card" id="side-files"></div>
+      <details id="side-files-group" open>
+        <summary id="side-files-title">記憶ファイル</summary>
+        <div class="card" id="side-files"></div>
+      </details>
     </div>
     <div id="side-model-bar">
       <button id="model-current" title="（未設定）｜クリックで切り替え">モデル</button>
@@ -972,6 +984,8 @@
 </div>
 
 <div id="toast"></div>
+
+<div id="context-menu"></div>
 
 <script>
 /* MDRENDER_START — AI吹き出し用の自前Markdownパーサ。外部ライブラリ・CDN不使用。
@@ -1222,6 +1236,7 @@ function renderMarkdownToHtml(raw) {
     renderRoleBar();
     renderDiary();
     renderSideFiles();
+    focusInputBoxIfAppropriate();
   }
 
   // --- ペット（ドット絵マスコット） ---
@@ -2000,6 +2015,154 @@ function renderMarkdownToHtml(raw) {
   $("input-box").addEventListener("input", autoGrowInput);
   $("input-box").addEventListener("keyup", updateSendHint);
   $("input-box").addEventListener("click", updateSendHint);
+
+  // --- ウィンドウ復帰時の入力欄フォーカス ---
+  // 他アプリで作業して戻ってくると入力欄のフォーカスが外れ、日本語IMEの状態も
+  // 戻ってしまう問題の緩和。チャットビューがactiveかつモーダル/ドロップダウンが
+  // 開いていない、かつ他の入力要素（設定画面のinput等）に既にフォーカスが
+  // 無い場合だけ、入力欄へフォーカスを戻す。起動直後（applyBoot後）にも
+  // 一度だけ呼ぶ（このfocus()を上書きで奪わないよう、こちらも同じ条件判定を通す）。
+  function focusInputBoxIfAppropriate() {
+    if (!$("chat-view").classList.contains("active")) return;
+    if ($("modal-overlay").classList.contains("open")) return;
+    if ($("import-modal").classList.contains("open")) return;
+    if ($("role-menu").classList.contains("open")) return;
+    if ($("soul-menu").classList.contains("open")) return;
+    if ($("model-menu").classList.contains("open")) return;
+    if ($("context-menu").classList.contains("open")) return;
+    var active = document.activeElement;
+    if (active && active !== document.body && active !== $("input-box")) {
+      var tag = active.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || active.isContentEditable) return;
+    }
+    $("input-box").focus();
+  }
+  window.addEventListener("focus", focusInputBoxIfAppropriate);
+
+  // --- 右クリックのコピペメニュー ---
+  // pywebviewは標準コンテキストメニューが出ないため自前実装する。既存の
+  // role-menu/soul-menu/model-menuと同じ「.open」慣習で開閉する単一の
+  // #context-menu要素を、右クリック位置に動的に組み立てて表示する。
+  function closeContextMenu() {
+    $("context-menu").classList.remove("open");
+  }
+
+  function copyTextToClipboard(text) {
+    if (!navigator.clipboard || !navigator.clipboard.writeText) {
+      showToast("コピーできなかった（Ctrl+Cを使って）", "error");
+      return;
+    }
+    navigator.clipboard.writeText(text).catch(function () {
+      showToast("コピーできなかった（Ctrl+Cを使って）", "error");
+    });
+  }
+
+  function pasteIntoInput(target) {
+    if (!navigator.clipboard || !navigator.clipboard.readText) {
+      showToast("貼り付けできなかった（Ctrl+Vを使って）", "error");
+      return;
+    }
+    navigator.clipboard.readText().then(function (text) {
+      if (!text) return;
+      target.focus();
+      var start = target.selectionStart != null ? target.selectionStart : target.value.length;
+      var end = target.selectionEnd != null ? target.selectionEnd : target.value.length;
+      if (typeof target.setRangeText === "function") {
+        target.setRangeText(text, start, end, "end");
+      } else {
+        target.value = target.value.slice(0, start) + text + target.value.slice(end);
+      }
+      target.dispatchEvent(new Event("input", { bubbles: true }));
+    }).catch(function () {
+      showToast("貼り付けできなかった（Ctrl+Vを使って）", "error");
+    });
+  }
+
+  function cutFromInput(target, selectionText) {
+    if (!navigator.clipboard || !navigator.clipboard.writeText) {
+      showToast("コピーできなかった（Ctrl+Cを使って）", "error");
+      return;
+    }
+    var start = target.selectionStart;
+    var end = target.selectionEnd;
+    navigator.clipboard.writeText(selectionText).then(function () {
+      if (typeof target.setRangeText === "function") {
+        target.setRangeText("", start, end, "end");
+      } else {
+        target.value = target.value.slice(0, start) + target.value.slice(end);
+      }
+      target.dispatchEvent(new Event("input", { bubbles: true }));
+      target.focus();
+    }).catch(function () {
+      showToast("コピーできなかった（Ctrl+Cを使って）", "error");
+    });
+  }
+
+  // target: 選択対象が入力欄（textarea/input）のときその要素、それ以外はnull
+  function buildContextMenuItems(target, selectionText) {
+    var items = [];
+    if (selectionText) {
+      items.push({ label: "コピー", action: function () { copyTextToClipboard(selectionText); } });
+    }
+    if (target) {
+      items.push({ label: "貼り付け", action: function () { pasteIntoInput(target); } });
+      if (selectionText) {
+        items.push({ label: "切り取り", action: function () { cutFromInput(target, selectionText); } });
+      }
+      items.push({ label: "全選択", action: function () { target.focus(); target.select(); } });
+    }
+    return items;
+  }
+
+  function showContextMenu(x, y, items) {
+    var menu = $("context-menu");
+    menu.innerHTML = "";
+    items.forEach(function (it) {
+      var el = document.createElement("div");
+      el.className = "item";
+      el.textContent = it.label;
+      el.addEventListener("click", function () {
+        closeContextMenu();
+        it.action();
+      });
+      menu.appendChild(el);
+    });
+    menu.style.left = x + "px";
+    menu.style.top = y + "px";
+    menu.classList.add("open");
+    // 画面端でのはみ出しは最低限の補正
+    var rect = menu.getBoundingClientRect();
+    var left = x, top = y;
+    if (left + rect.width > window.innerWidth) left = Math.max(0, window.innerWidth - rect.width - 4);
+    if (top + rect.height > window.innerHeight) top = Math.max(0, window.innerHeight - rect.height - 4);
+    menu.style.left = left + "px";
+    menu.style.top = top + "px";
+  }
+
+  var TEXT_FIELD_TYPES = /^(text|search|password|number|email|url|tel)$/;
+  document.addEventListener("contextmenu", function (e) {
+    var target = e.target;
+    var isTextField = !!target && (target.tagName === "TEXTAREA" ||
+      (target.tagName === "INPUT" && TEXT_FIELD_TYPES.test(target.type || "text")));
+    var selectionText = "";
+    if (isTextField && typeof target.selectionStart === "number" && target.selectionStart !== target.selectionEnd) {
+      selectionText = target.value.slice(target.selectionStart, target.selectionEnd);
+    } else if (!isTextField) {
+      var sel = window.getSelection();
+      if (sel && sel.toString()) selectionText = sel.toString();
+    }
+    // 対象が入力欄でも選択でもなければ、メニューを出さずデフォルト動作のまま
+    if (!isTextField && !selectionText) return;
+    e.preventDefault();
+    closeAllDropdowns();
+    var items = buildContextMenuItems(isTextField ? target : null, selectionText);
+    if (!items.length) return;
+    showContextMenu(e.clientX, e.clientY, items);
+  });
+  document.addEventListener("click", closeContextMenu);
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") closeContextMenu();
+  });
 
   // --- ロール切替 ---
   function renderRoleBar() {
