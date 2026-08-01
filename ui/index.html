@@ -440,7 +440,23 @@
   #log-body.log-view { white-space: normal; display: flex; flex-direction: column; gap: 10px; }
 
   /* --- 設定ビュー --- */
-  #settings-view { overflow-y: auto; padding: 24px; flex-direction: column; gap: 20px; }
+  #settings-view { padding: 0; flex-direction: column; gap: 0; }
+  #settings-view #settings-tabs {
+    display: flex; gap: 6px; flex: none;
+    padding: 14px 24px 0 24px; border-bottom: 1px solid var(--line);
+  }
+  #settings-view .settings-tab-btn {
+    background: none; border: none; padding: 10px 16px;
+    border-radius: var(--card-radius) var(--card-radius) 0 0;
+    font-size: 14px; color: var(--fg); cursor: pointer;
+  }
+  #settings-view .settings-tab-btn:hover { background: var(--bg2); }
+  #settings-view .settings-tab-btn.active { background: var(--accent); color: var(--accent-fg); }
+  #settings-view .settings-pane {
+    display: none; flex: 1; min-height: 0; overflow-y: auto;
+    padding: 24px; flex-direction: column; gap: 20px;
+  }
+  #settings-view .settings-pane.active { display: flex; }
   .card {
     background: var(--bg2); border-radius: var(--card-radius); padding: 20px; margin-bottom: 18px;
   }
@@ -666,6 +682,14 @@
 
     <!-- 設定ビュー -->
     <div class="view" id="settings-view">
+      <div id="settings-tabs">
+        <button class="settings-tab-btn active" data-tab="soul">SOUL</button>
+        <button class="settings-tab-btn" data-tab="model">モデル</button>
+        <button class="settings-tab-btn" data-tab="memory">記憶</button>
+        <button class="settings-tab-btn" data-tab="display">画面と音</button>
+      </div>
+
+      <div class="settings-pane active" data-pane="soul">
       <div class="card" id="soul-card">
         <h3>SOUL管理</h3>
         <div id="soul-list"></div>
@@ -733,30 +757,6 @@
         <div style="margin-top:10px;"><button id="show-prompt-btn">いまの注入内容を見る</button></div>
       </div>
 
-      <div class="card" id="workspace-card">
-        <h3>作業フォルダ</h3>
-        <div class="row">
-          <label>フォルダパス</label>
-          <input type="text" id="workspace-dir-input" placeholder="例: C:\Users\...\執筆メモ">
-        </div>
-        <div style="margin-top:10px;"><button id="save-workspace-btn">保存</button></div>
-        <div class="hint">指定すると、AIがこのフォルダの.md/.txt/.html/.css/.jsを会話中に読み書きできるようになります（.bak退避つき）。空欄で機能OFF。記事や原稿の専用フォルダを指定してください（ドライブ直下などの巨大フォルダは非推奨）</div>
-      </div>
-
-      <div class="card" id="auto-recall-card">
-        <h3>連想記憶（自動で思い出す）</h3>
-        <div class="toggle-row">
-          <input type="checkbox" id="auto-recall-enabled">
-          <label style="min-width:auto;">発言に関連する記憶を自動で思い出す（既存の記憶検索を裏で実行してプロンプトに差し込む）</label>
-        </div>
-        <div class="row">
-          <label>件数</label>
-          <input type="number" id="auto-recall-max-hits" min="1" max="10" step="1">
-        </div>
-        <div style="margin-top:10px;"><button id="save-auto-recall-btn">保存</button></div>
-        <div class="hint">聞かれる前に思い出す機能。関連度は簡易ランクのため外れることもあります（AIには「関係なければ無視してよい」と伝えています）。正確な内容が必要ならAIはread_memoryで全文を読みます</div>
-      </div>
-
       <div class="card" id="pet-card">
         <h3>ペット</h3>
         <div class="toggle-row">
@@ -776,41 +776,9 @@
         <div class="hint">チャット画面のペットにマウスを重ねるとつまみ（⠿）が出て、ドラッグで好きな位置に動かせます（位置はドラッグ終了時に自動保存、大きさは上のスライダー＋保存ボタン）</div>
       </div>
 
-      <div class="card" id="theme-card">
-        <h3>テーマ</h3>
-        <div class="row">
-          <label>表示</label>
-          <select id="theme-select">
-            <option value="light">ライト</option>
-            <option value="dark">ダーク</option>
-          </select>
-        </div>
-        <div class="toggle-row" style="margin-top:12px;">
-          <input type="checkbox" id="streaming-enabled-checkbox">
-          <label style="min-width:auto;">ストリーミング表示（文字が流れて出る。OFFで従来どおり全文完成後に一括表示）</label>
-        </div>
-        <div class="hint" style="margin-top:4px;">
-          ※フォールバックプロバイダを設定している場合、ONでも一括表示になる（切替の安全性を優先する仕様）
-        </div>
-        <div class="row" style="margin-top:12px;">
-          <label>返信音</label>
-          <select id="reply-se-select">
-            <option value="">なし</option>
-            <option value="se-kachi.mp3">カチッ（メカニカル）</option>
-            <option value="se-poyo.mp3">ぽよっ（バブル）</option>
-            <option value="se-koto.mp3">コトッ（キースイッチ）</option>
-            <option value="se-pofun.mp3">ぽふん（チャイム）</option>
-            <option value="se-poko.mp3">ぽこっ（マリンバ）</option>
-            <option value="se-pichon.mp3">ぴちょん（しずく）</option>
-          </select>
-        </div>
-        <div class="hint">LLMの返信が届いたときに鳴る音。選ぶとすぐ試し鳴らしする</div>
-        <div class="toggle-row" style="margin-top:12px;">
-          <input type="checkbox" id="ime-auto-ja-checkbox">
-          <label style="min-width:auto;">入力欄フォーカス時に日本語入力へ切り替える</label>
-        </div>
       </div>
 
+      <div class="settings-pane" data-pane="model">
       <div class="card" id="provider-card">
         <h3>プロバイダ</h3>
         <div class="row">
@@ -937,14 +905,31 @@
         <div class="hint">キーは .env に保存される（config.jsonには書かない）。一度保存した値はこの画面に表示されない。</div>
       </div>
 
-      <div class="card" id="backup-card">
-        <h3>バックアップ</h3>
-        <div class="row"><button id="backup-btn">魂をバックアップ</button></div>
-        <div class="hint" id="backup-result" style="user-select: text;"></div>
-        <div class="hint">souls・config・rolesを日付つきzipに保存します（APIキーは含まれません）</div>
-        <div class="row"><button id="restore-btn" class="ghost">バックアップから復元</button></div>
-        <div class="hint" id="restore-result" style="user-select: text;"></div>
-        <div class="hint">選んだzipの内容で復元します（復元前の状態は自動でバックアップされます。zipに無い既存SOULは残ります）</div>
+      </div>
+
+      <div class="settings-pane" data-pane="memory">
+      <div class="card" id="workspace-card">
+        <h3>作業フォルダ</h3>
+        <div class="row">
+          <label>フォルダパス</label>
+          <input type="text" id="workspace-dir-input" placeholder="例: C:\Users\...\執筆メモ">
+        </div>
+        <div style="margin-top:10px;"><button id="save-workspace-btn">保存</button></div>
+        <div class="hint">指定すると、AIがこのフォルダの.md/.txt/.html/.css/.jsを会話中に読み書きできるようになります（.bak退避つき）。空欄で機能OFF。記事や原稿の専用フォルダを指定してください（ドライブ直下などの巨大フォルダは非推奨）</div>
+      </div>
+
+      <div class="card" id="auto-recall-card">
+        <h3>連想記憶（自動で思い出す）</h3>
+        <div class="toggle-row">
+          <input type="checkbox" id="auto-recall-enabled">
+          <label style="min-width:auto;">発言に関連する記憶を自動で思い出す（既存の記憶検索を裏で実行してプロンプトに差し込む）</label>
+        </div>
+        <div class="row">
+          <label>件数</label>
+          <input type="number" id="auto-recall-max-hits" min="1" max="10" step="1">
+        </div>
+        <div style="margin-top:10px;"><button id="save-auto-recall-btn">保存</button></div>
+        <div class="hint">聞かれる前に思い出す機能。関連度は簡易ランクのため外れることもあります（AIには「関係なければ無視してよい」と伝えています）。正確な内容が必要ならAIはread_memoryで全文を読みます</div>
       </div>
 
       <div class="card" id="import-block">
@@ -960,9 +945,59 @@
         </div>
       </div>
 
+      <div class="card" id="backup-card">
+        <h3>バックアップ</h3>
+        <div class="row"><button id="backup-btn">魂をバックアップ</button></div>
+        <div class="hint" id="backup-result" style="user-select: text;"></div>
+        <div class="hint">souls・config・rolesを日付つきzipに保存します（APIキーは含まれません）</div>
+        <div class="row"><button id="restore-btn" class="ghost">バックアップから復元</button></div>
+        <div class="hint" id="restore-result" style="user-select: text;"></div>
+        <div class="hint">選んだzipの内容で復元します（復元前の状態は自動でバックアップされます。zipに無い既存SOULは残ります）</div>
+      </div>
+
       <div class="card" id="scheduler-card">
         <h3>定期処理</h3>
         <div id="scheduler-list"></div>
+      </div>
+
+      </div>
+
+      <div class="settings-pane" data-pane="display">
+      <div class="card" id="theme-card">
+        <h3>テーマ</h3>
+        <div class="row">
+          <label>表示</label>
+          <select id="theme-select">
+            <option value="light">ライト</option>
+            <option value="dark">ダーク</option>
+          </select>
+        </div>
+        <div class="toggle-row" style="margin-top:12px;">
+          <input type="checkbox" id="streaming-enabled-checkbox">
+          <label style="min-width:auto;">ストリーミング表示（文字が流れて出る。OFFで従来どおり全文完成後に一括表示）</label>
+        </div>
+        <div class="hint" style="margin-top:4px;">
+          ※フォールバックプロバイダを設定している場合、ONでも一括表示になる（切替の安全性を優先する仕様）
+        </div>
+        <div class="row" style="margin-top:12px;">
+          <label>返信音</label>
+          <select id="reply-se-select">
+            <option value="">なし</option>
+            <option value="se-kachi.mp3">カチッ（メカニカル）</option>
+            <option value="se-poyo.mp3">ぽよっ（バブル）</option>
+            <option value="se-koto.mp3">コトッ（キースイッチ）</option>
+            <option value="se-pofun.mp3">ぽふん（チャイム）</option>
+            <option value="se-poko.mp3">ぽこっ（マリンバ）</option>
+            <option value="se-pichon.mp3">ぴちょん（しずく）</option>
+          </select>
+        </div>
+        <div class="hint">LLMの返信が届いたときに鳴る音。選ぶとすぐ試し鳴らしする</div>
+        <div class="toggle-row" style="margin-top:12px;">
+          <input type="checkbox" id="ime-auto-ja-checkbox">
+          <label style="min-width:auto;">入力欄フォーカス時に日本語入力へ切り替える</label>
+        </div>
+      </div>
+
       </div>
     </div>
   </div>
@@ -3769,22 +3804,56 @@ function renderMarkdownToHtml(raw) {
     }
   };
 
+  // --- 設定タブ切替 ---
+  // タブごとに呼ぶrenderをまとめる。各render関数側に既存の
+  // `if (!state.settings) return;` ガードがあるので、ここでは二重にガードしない。
+  var SETTINGS_TAB_RENDERERS = {
+    soul: function () {
+      renderSoulList();
+      renderRoleList();
+      renderAutoRoleSwitch();
+      renderFactLayer();
+      renderPetCard();
+    },
+    model: function () {
+      renderProviderCard();
+      renderApiKeyList();
+    },
+    memory: function () {
+      renderWorkspaceCard();
+      renderAutoRecallCard();
+      refreshImportCount();
+      renderScheduledJobs();
+    },
+    display: function () {
+      renderThemeCard();
+    }
+  };
+
+  function switchSettingsTab(tab) {
+    var prevBtn = document.querySelector("#settings-view .settings-tab-btn.active");
+    var prevTab = prevBtn ? prevBtn.dataset.tab : null;
+    document.querySelectorAll("#settings-view .settings-tab-btn").forEach(function (b) {
+      b.classList.toggle("active", b.dataset.tab === tab);
+    });
+    document.querySelectorAll("#settings-view .settings-pane").forEach(function (p) {
+      p.classList.toggle("active", p.dataset.pane === tab);
+    });
+    // 「モデル」タブから他タブへ切り替えたときはOAuthポーリングを止める
+    if (prevTab === "model" && tab !== "model") stopOauthPolling();
+    var renderFn = SETTINGS_TAB_RENDERERS[tab];
+    if (renderFn) renderFn();
+  }
+
+  document.querySelectorAll("#settings-view .settings-tab-btn").forEach(function (btn) {
+    btn.addEventListener("click", function () { switchSettingsTab(btn.dataset.tab); });
+  });
+
   function loadSettings() {
     window.pywebview.api.get_settings().then(function (data) {
       state.settings = data;
-      renderSoulList();
-      renderRoleList();
-      renderFactLayer();
-      renderWorkspaceCard();
-      renderAutoRoleSwitch();
-      renderAutoRecallCard();
-      renderPetCard();
-      renderThemeCard();
-      renderProviderCard();
-      renderApiKeyList();
-      refreshImportCount();
+      switchSettingsTab("soul");
     });
-    renderScheduledJobs();
   }
 
   function renderScheduledJobs() {
