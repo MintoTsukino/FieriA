@@ -723,3 +723,19 @@ def test_oauth_named_files_are_rejected_and_hidden_still_passes(tmp_path):
         ws.write_doc(str(tmp_path), "xai_oauth.json", "x")
     assert not any("oauth" in d.lower() for d in ws.list_docs(str(tmp_path)))
     assert not any("oauth" in h.lower() for h in ws.search_workspace(str(tmp_path), "dummy"))
+
+
+def test_list_and_search_hide_fieria_home_contents():
+    """workspace_dirをfieria_home自体に向けても、一覧・検索が内部データを漏らさない
+    （read_docの拒否と対称）。レビューで発見された情報漏洩経路の回帰テスト。"""
+    import os
+    import config
+    import workspace as ws
+    inner = os.path.join(config.HOME, "diary_leak_check.md")
+    with open(inner, "w", encoding="utf-8") as f:
+        f.write("confidential diary content ABC999\n")
+    try:
+        assert ws.list_docs(config.HOME) == []
+        assert ws.search_workspace(config.HOME, "ABC999") == []
+    finally:
+        os.remove(inner)
