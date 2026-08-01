@@ -66,7 +66,8 @@ def stage_files(soul_id, paths):
     staged, skipped = [], []
     for p in paths:
         if os.path.isdir(p):
-            for dirpath, _dirs, files in os.walk(p):
+            for dirpath, dirs, files in os.walk(p):
+                dirs.sort()  # サブフォルダの走査順を決定的にする
                 for f in sorted(files):
                     _stage_one(os.path.join(dirpath, f), inbox, staged, skipped)
         elif os.path.isfile(p):
