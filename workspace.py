@@ -7,6 +7,8 @@ soul.pyの_safe_pathと同方式のトラバーサル拒否に加え、拡張子
 """
 import os
 
+import config
+
 ALLOWED_EXTS = (".md", ".txt", ".html", ".css", ".js", ".json", ".py")
 # list_docsの列挙対象だけ.pdfも含める（read_pdf_bytesで見るため）。
 # write_doc/append_doc/read_doc（テキスト読み書き）の対象拡張子はALLOWED_EXTSのまま変えない。
@@ -15,9 +17,20 @@ LISTABLE_EXTS = ALLOWED_EXTS + (".pdf",)
 MAX_PDF_BYTES = 14 * 1024 * 1024  # 14MB（gui.pdf_native_supported/Gemini直読みのraw上限と揃える）
 
 
+# ファイル名ベースの機密判定。拡張子ホワイトリストを通る名前（secrets.json等）を
+# 名指しで塞ぐ。誤爆（secretary.md等）は安全側に倒す設計判断（2026-08-02）
+_SENSITIVE_NAME_PARTS = ("oauth", "secret", "credential", "apikey", "api_key")
+
+
+def _is_sensitive_name(name):
+    low = name.lower()
+    return any(p in low for p in _SENSITIVE_NAME_PARTS)
+
+
 def _resolve_safe_path(workspace_dir, rel_path):
-    """コロン拒否・隠しパス拒否・トラバーサル拒否の共通検査（拡張子検査はしない）。
-    _safe_path（テキスト系）とread_pdf_bytes（.pdf限定）の両方から使う。"""
+    """コロン拒否・隠しパス拒否・トラバーサル拒否・機密名拒否・fieria_home到達拒否の
+    共通検査（拡張子検査はしない）。_safe_path（テキスト系）とread_pdf_bytes（.pdf限定）
+    の両方から使う。"""
     base = os.path.abspath(workspace_dir)
     # rel_pathは常に相対パスのはずなので、コロンが含まれる時点で不正とみなす。
     # （NTFS代替データストリーム "hidden.exe:x.md" は拡張子チェックを文字列末尾一致で
@@ -33,6 +46,16 @@ def _resolve_safe_path(workspace_dir, rel_path):
     full = os.path.abspath(os.path.join(base, rel_path))
     if not full.startswith(base + os.sep) and full != base:
         raise ValueError(f"作業フォルダの外は触れない: {rel_path}")
+    # .json解禁に伴う安全弁: OAuth/秘密鍵/認証情報っぽい名前のファイルが作業フォルダに
+    # 置かれていても読み書きさせない（.envは拡張子検査で既に弾かれている）。
+    if _is_sensitive_name(os.path.basename(full)):
+        raise ValueError(f"機密ファイル類には触れない: {rel_path}")
+    # 作業フォルダがシンボリックリンク等でfieria_home（会話ログ・記憶・config.json等の
+    # 内部データ）に到達していないかを実パスで確認する（2026-08-02追加の物理拒否）。
+    real_full = os.path.realpath(full)
+    real_home = os.path.realpath(config.HOME)
+    if real_full == real_home or real_full.startswith(real_home + os.sep):
+        raise ValueError(f"FieriAの内部データ（fieria_home）には触れない: {rel_path}")
     return full
 
 
@@ -40,10 +63,6 @@ def _safe_path(workspace_dir, rel_path):
     full = _resolve_safe_path(workspace_dir, rel_path)
     if not full.lower().endswith(ALLOWED_EXTS):
         raise ValueError(f"許可されていない拡張子: {rel_path}")
-    # .json解禁に伴う安全弁: OAuthトークン類（xai_oauth.json等）が作業フォルダに
-    # 置かれていても読み書きさせない。.envは拡張子検査で既に弾かれている。
-    if "oauth" in os.path.basename(full).lower():
-        raise ValueError(f"認証トークン類には触れない: {rel_path}")
     return full
 
 
@@ -88,8 +107,8 @@ def _iter_listable_files(base, state=None):
             dirs[:] = []  # これ以上深くは降りない（現在の階層のファイルは拾う）
         for f in files:
             if f.lower().endswith(LISTABLE_EXTS):
-                if "oauth" in f.lower():
-                    continue  # _safe_pathの認証トークン拒否と対称（見せない・触らせない）
+                if _is_sensitive_name(f):
+                    continue  # _resolve_safe_pathの機密名拒否と対称（見せない・触らせない）
                 full = os.path.join(root, f)
                 rel = os.path.relpath(full, base).replace("\\", "/")
                 yield rel, full
