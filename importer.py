@@ -171,6 +171,10 @@ def import_one(cfg, llm, soul_id, filename, on_log=None):
                 break
             _reply, calls = memory_tools.extract_tool_calls(raw)
             for call in calls:
+                if not isinstance(call, dict):
+                    ops.append({"ok": False, "op": "(不明)",
+                                "detail": "ツール呼び出しがオブジェクト形式でない"})
+                    continue
                 tool = call.get("tool", "")
                 if tool not in ALLOWED_TOOLS:
                     ops.append({"ok": False, "op": tool or "(不明)",

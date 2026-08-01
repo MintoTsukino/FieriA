@@ -181,3 +181,12 @@ def test_import_one_multichunk_calls_llm_per_chunk(tmp_path, monkeypatch):
     assert len(fake.calls) == 2
     assert "分割 1/2" in fake.calls[0][1]["content"]
     assert "分割 2/2" in fake.calls[1][1]["content"]
+
+
+def test_import_one_non_dict_tool_call_does_not_crash(tmp_path):
+    sid = _staged_soul(tmp_path)
+    bad = "```fieria-tool\n[1, 2]\n```\n" + TOOL_REPLY
+    res = importer.import_one({}, FakeLLM([bad]), sid, "取り込み.md")
+    assert res["ok"] is True
+    rejected = [op for op in res["ops"] if not op["ok"]]
+    assert any(op["detail"] == "ツール呼び出しがオブジェクト形式でない" for op in rejected)
