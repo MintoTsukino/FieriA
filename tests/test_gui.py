@@ -1408,3 +1408,25 @@ def test_save_pet_pos_accepts_numeric_strings():
     result = bridge.save_pet_pos("30", "45")
 
     assert result == {"right": 30, "bottom": 45}
+
+
+# --- プロバイダ別推論エフォート: save_settings時のホワイトリスト正規化 ---
+# 2026-08-02追加。Task 1のllm.REASONING_EFFORTSを唯一の正としてGUI/JS由来の
+# reasoning_effortをここで確定させる（大文字化・不正値・キー欠落の3パターン）。
+
+
+def test_save_settings_normalizes_reasoning_effort():
+    import gui
+    b = gui.Bridge()
+    llm_cfg = {"provider": "ollama", "providers": {
+        "ollama": {"type": "openai_compat", "base_url": "http://x/v1",
+                   "model": "m", "reasoning_effort": "HIGH"},
+        "gemini": {"type": "gemini", "model": "g", "env_key": "GEMINI_API_KEY",
+                   "reasoning_effort": "turbo"},
+        "groq": {"type": "openai_compat", "base_url": "http://y/v1", "model": "m2"},
+    }}
+    b.save_settings({"llm": llm_cfg})
+    provs = b._cfg["llm"]["providers"]
+    assert provs["ollama"]["reasoning_effort"] == "high"
+    assert provs["gemini"]["reasoning_effort"] == ""
+    assert provs["groq"]["reasoning_effort"] == ""
