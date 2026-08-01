@@ -729,6 +729,16 @@
         </div>
         <div id="model-list-box" style="display:none;"></div>
         <div class="hint" id="model-list-msg"></div>
+        <div class="row">
+          <label>推論エフォート</label>
+          <select id="provider-effort">
+            <option value="">指定なし</option>
+            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+          </select>
+        </div>
+        <div class="hint">対応モデルのみ有効。非対応モデルでは無視される</div>
         <div class="row" id="provider-baseurl-row" style="display:none;">
           <label>base_url</label>
           <input type="text" id="provider-baseurl">
@@ -2603,6 +2613,7 @@ function renderMarkdownToHtml(raw) {
     });
     var current = providers[llm.provider] || {};
     $("provider-model").value = current.model || "";
+    $("provider-effort").value = current.reasoning_effort || "";
     var isCustom = llm.provider === "custom";
     $("provider-baseurl-row").style.display = isCustom ? "" : "none";
     $("provider-baseurl").value = isCustom ? (current.base_url || "") : "";
@@ -2678,6 +2689,7 @@ function renderMarkdownToHtml(raw) {
     var providers = (state.settings.llm || {}).providers || {};
     var current = providers[name] || {};
     $("provider-model").value = current.model || "";
+    $("provider-effort").value = current.reasoning_effort || "";
     var isCustom = name === "custom";
     $("provider-baseurl-row").style.display = isCustom ? "" : "none";
     $("provider-baseurl").value = isCustom ? (current.base_url || "") : "";
@@ -2895,6 +2907,7 @@ function renderMarkdownToHtml(raw) {
     llm.providers = llm.providers || {};
     llm.providers[name] = llm.providers[name] || {};
     llm.providers[name].model = $("provider-model").value;
+    llm.providers[name].reasoning_effort = $("provider-effort").value;
     if (name === "custom") {
       llm.providers[name].base_url = $("provider-baseurl").value;
     }
