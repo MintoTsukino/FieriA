@@ -228,3 +228,21 @@ def test_run_import_failure_continues_to_next(tmp_path):
     assert summary["failed"] == [{"file": "a.md",
                                   "detail": "記憶への書き込みが行われなかった"}]
     assert importer.list_inbox(sid) == ["a.md"]
+
+
+def test_run_import_exception_in_import_one_continues(tmp_path, monkeypatch):
+    sid = _staged_two(tmp_path)
+    real_import_one = importer.import_one
+
+    def boom_then_real(cfg, llm, soul_id, filename, on_log=None):
+        if filename == "a.md":
+            raise OSError("ディスク満杯")
+        return real_import_one(cfg, llm, soul_id, filename, on_log)
+
+    monkeypatch.setattr(importer, "import_one", boom_then_real)
+    summary = importer.run_import({}, FakeLLM([TOOL_REPLY]), sid)
+    assert summary["total"] == 2
+    assert summary["done"] == 1
+    assert summary["failed"][0]["file"] == "a.md"
+    assert "予期しない例外" in summary["failed"][0]["detail"]
+    assert importer.list_inbox(sid) == ["a.md"]

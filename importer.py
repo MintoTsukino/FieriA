@@ -220,7 +220,11 @@ def run_import(cfg, llm, soul_id, on_progress=None, should_stop=None):
         if on_progress:
             on_progress({"kind": "file_start", "file": fname,
                          "index": i, "total": total})
-        result = import_one(cfg, llm, soul_id, fname)
+        try:
+            result = import_one(cfg, llm, soul_id, fname)
+        except Exception as e:
+            result = {"ok": False, "file": fname, "ops": [],
+                      "detail": f"予期しない例外: {e}"}
         if result["ok"]:
             done += 1
         else:
