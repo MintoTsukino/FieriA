@@ -13,6 +13,7 @@ import zipfile
 import webview
 
 import config as config_mod
+import importer
 import memory_tools
 import prompt as prompt_mod
 import roles as roles_mod
@@ -159,6 +160,8 @@ class Bridge:
             self._scheduler.start(
                 lambda: (self._cfg, self._llm, self._cfg.get("active_soul"))
             )
+        self._importing = False
+        self._import_stop = False
 
     def _ensure_engine(self):
         if not self._cfg.get("active_soul"):
@@ -787,6 +790,43 @@ class Bridge:
             return {"ok": True, "path": os.path.abspath(zip_path), "size_mb": size_mb}
         except Exception as e:
             return {"ok": False, "error": str(e)}
+
+    def get_import_status(self):
+        """inboxの状態。UIのカウンタ表示と実行前確認に使う。"""
+        soul_id = self._cfg.get("active_soul")
+        if not soul_id:
+            return {"count": 0, "files": [], "importing": bool(self._importing)}
+        files = importer.list_inbox(soul_id)
+        return {"count": len(files), "files": files,
+                "importing": bool(self._importing)}
+
+    def _stage_import(self, paths):
+        soul_id = self._cfg.get("active_soul")
+        if not soul_id:
+            return {"error": "SOULが選ばれていない"}
+        out = importer.stage_files(soul_id, paths)
+        out["inbox_count"] = len(importer.list_inbox(soul_id))
+        return out
+
+    def pick_and_stage_import_files(self):
+        """MDファイルを複数選択してinboxへコピー。（ネイティブダイアログ呼び出しのためテスト対象外）"""
+        if not webview.windows:
+            return {"error": "ウィンドウがない"}
+        result = webview.windows[0].create_file_dialog(
+            webview.OPEN_DIALOG, allow_multiple=True,
+            file_types=("Markdownファイル (*.md;*.markdown;*.txt)",))
+        if not result:
+            return self._stage_import([])
+        return self._stage_import(list(result))
+
+    def pick_and_stage_import_folder(self):
+        """フォルダを選択して中のMDを再帰的にinboxへコピー。（同上テスト対象外）"""
+        if not webview.windows:
+            return {"error": "ウィンドウがない"}
+        result = webview.windows[0].create_file_dialog(webview.FOLDER_DIALOG)
+        if not result:
+            return self._stage_import([])
+        return self._stage_import(list(result))
 
     def pick_backup_file(self):
         """バックアップzipをOSのファイル選択ダイアログで選ばせ、選ばれた絶対パスを
