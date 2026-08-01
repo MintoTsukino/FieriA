@@ -97,3 +97,42 @@ def test_send_message_refused_during_import():
     out = b.send_message("やあ")
     assert "error" in out
     b._importing = False
+
+
+def test_start_import_rechecks_busy_under_lock_after_inbox_io(tmp_path, monkeypatch):
+    """list_inbox（I/O窓）の最中に会話ターンが始まったケース: ロック下の再チェックで拒否される。"""
+    b, sid = _bridge_with_soul("競合窓試験1")
+    (tmp_path / "r.md").write_text("R", encoding="utf-8")
+    importer.stage_files(sid, [str(tmp_path / "r.md")])
+    real_list_inbox = importer.list_inbox
+
+    def list_inbox_with_race(soul_id):
+        b._busy_turns = 1  # I/O中にsend_messageが滑り込んだ状況を再現
+        return real_list_inbox(soul_id)
+
+    monkeypatch.setattr(gui.importer, "list_inbox", list_inbox_with_race)
+    out = b.start_import()
+    assert out == {"error": "会話の処理中はインポートできない"}
+    assert b._importing is False
+    b._busy_turns = 0
+
+
+def test_send_message_rechecks_importing_under_lock(monkeypatch):
+    """冒頭ガード通過後にインポートが始まったケース: 加算直前のロック下再チェックで拒否される。"""
+    b, _sid = _bridge_with_soul("競合窓試験2")
+
+    class MustNotRunEngine:
+        def process_turn(self, text, images=None, on_delta=None, on_status=None):
+            raise AssertionError("競合窓: インポート中にターンが走った")
+
+    b._engine = MustNotRunEngine()
+
+    def attach_with_race(images):
+        b._importing = True  # ガード通過後にstart_importが滑り込んだ状況を再現
+        return images
+
+    monkeypatch.setattr(gui, "_attach_pdf_page_counts", attach_with_race)
+    out = b.send_message("やあ")
+    assert "error" in out and "インポート処理中" in out["error"]
+    assert b._busy_turns == 0
+    b._importing = False

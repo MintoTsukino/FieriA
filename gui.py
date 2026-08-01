@@ -216,6 +216,10 @@ class Bridge:
         # ウィンドウがあれば送る（表示専用・失敗は握る）。
         on_status = self._push_turn_status if self._window else None
         with self._busy_lock:
+            # 冒頭の_importingチェック後にインポートが開始された可能性があるため、
+            # ターン開始を確定する直前にロック下で再チェックする（start_import側と対）。
+            if self._importing:
+                return {"error": "インポート処理中は会話できない（完了かキャンセルを待って）"}
             self._busy_turns += 1
         try:
             result = self._engine.process_turn(text, images=images, on_delta=on_delta,
@@ -815,14 +819,19 @@ class Bridge:
         soul_id = self._cfg.get("active_soul")
         if not soul_id:
             return {"error": "SOULが選ばれていない"}
-        if self.is_llm_busy():
-            return {"error": "会話の処理中はインポートできない"}
-        if self._importing:
-            return {"error": "すでにインポート処理中"}
         files = importer.list_inbox(soul_id)
         if not files:
             return {"error": "inboxが空。先にファイルを追加して"}
-        self._importing = True
+        # 判定→フラグセットを_busy_lockの下で一体化する。pywebviewは各API呼び出しを
+        # 別スレッドで走らせるため、send_message側の判定・加算と交差しうる。
+        # ファイルI/O（list_inbox）はロックの外で済ませてある。is_llm_busy()は
+        # 内部で同じロックを取るため、ここでは_busy_turnsを直接見る（再入不可のLock）。
+        with self._busy_lock:
+            if self._busy_turns > 0:
+                return {"error": "会話の処理中はインポートできない"}
+            if self._importing:
+                return {"error": "すでにインポート処理中"}
+            self._importing = True
         self._import_stop = False
         threading.Thread(target=self._run_import_thread,
                          args=(soul_id,), daemon=True).start()
