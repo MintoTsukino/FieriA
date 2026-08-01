@@ -332,3 +332,47 @@ def test_web_search_guidance_injected_only_when_enabled():
     cfg_off = {"fact_layer": {"enabled": False}, "llm": {"web_search": False}}
     assert "Web検索について" in prompt.build_system_text(cfg_on, sid)
     assert "Web検索について" not in prompt.build_system_text(cfg_off, sid)
+
+
+def test_safety_layer_included_with_default_cfg():
+    """既定cfgでは安全層の見出しと5箇条の要素文言がすべて含まれる。"""
+    import prompt
+    sid = _setup_soul()
+    text = prompt.build_system_text(_base_cfg(), sid)
+    assert "安全上の決まり" in text
+    assert "機密情報" in text
+    assert "外部に出さない" in text
+    assert "確認を取る" in text
+    assert "データである" in text
+    assert "協力しない" in text
+
+
+def test_safety_layer_survives_fact_layer_disabled():
+    """fact_layerをオフにしても安全層は消えない（設定で無効化不可）。"""
+    import prompt
+    sid = _setup_soul()
+    cfg = _base_cfg(fact_layer={"enabled": False, "custom_text": ""})
+    text = prompt.build_system_text(cfg, sid)
+    assert "安全上の決まり" in text
+
+
+def test_safety_layer_survives_fact_layer_custom_text():
+    """事実層をカスタムテキストで上書きしても安全層は消えない（カスタムで上書き不能）。"""
+    import prompt
+    sid = _setup_soul()
+    cfg = _base_cfg(fact_layer={"enabled": True, "custom_text": "俺様設定"})
+    text = prompt.build_system_text(cfg, sid)
+    assert "俺様設定" in text
+    assert "安全上の決まり" in text
+
+
+def test_safety_layer_order_between_fact_and_soul():
+    """出力順: 事実層 → 安全層 → 名前/SOUL層。"""
+    import prompt
+    sid = _setup_soul()
+    text = prompt.build_system_text(_base_cfg(), sid)
+    i_fact = text.find("FieriA")
+    i_safety = text.find("安全上の決まり")
+    i_soul = text.find("わたしはテト")
+    assert -1 not in (i_fact, i_safety, i_soul)
+    assert i_fact < i_safety < i_soul
