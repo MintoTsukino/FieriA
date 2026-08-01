@@ -263,6 +263,8 @@ class OpenAICompatLLM(_ChatStreamFallbackMixin):
 # （2026-07-07時点、実測はしていない・要検証の値）。
 _GEMINI_THINKING_BUDGET = {"low": 0, "medium": 2048, "high": 8192}
 
+REASONING_EFFORTS = ("", "low", "medium", "high")
+
 # FieriA拡張: Web検索（Gemini Google Search grounding）
 _GEMINI_MAX_SOURCES = 3
 
@@ -618,7 +620,7 @@ class CodexOAuthLLM(_ChatStreamFallbackMixin):
         self.model = entry.get("model", "gpt-5.5")
         self.temperature = temperature
         self.max_tokens = max_tokens
-        self.reasoning_effort = reasoning_effort
+        self.reasoning_effort = (reasoning_effort or "").strip()
 
     def _headers(self):
         import openai_codex_oauth
@@ -681,6 +683,8 @@ class CodexOAuthLLM(_ChatStreamFallbackMixin):
                 for m in messages if m["role"] != "system"
             ],
         }
+        if self.reasoning_effort:
+            payload["reasoning"] = {"effort": self.reasoning_effort}
         raw = _post_sse(f"{self.CODEX_BASE_URL}/responses", payload, headers=self._headers())
 
         # stream:true時は本文がresponse.output_text.deltaで届く（最終イベントの
@@ -790,11 +794,16 @@ def create_llm(llm_cfg, env, on_log=None):
         raise ValueError(f"llm.provider '{name}' が providers に無い")
     temperature = float(llm_cfg.get("temperature", 0.8))
     max_tokens = int(llm_cfg.get("max_tokens", 400))
-    reasoning_effort = llm_cfg.get("reasoning_effort", "")
+
+    def _effort_for(entry):
+        # プロバイダentry個別の指定を優先し、無ければllm直下（旧・手書き互換）に落ちる
+        return ((entry.get("reasoning_effort") or llm_cfg.get("reasoning_effort", "") or "")).strip()
+
     # FieriA拡張: Web検索。llm直下のグローバルトグル（プロバイダ個別のproviders[name]
     # ではない）なので、プライマリ・フォールバック両方の構築に同じ値を渡す。
     web_search = bool(llm_cfg.get("web_search", False))
-    primary = build_provider(providers[name], env, temperature, max_tokens, reasoning_effort, web_search)
+    primary = build_provider(providers[name], env, temperature, max_tokens,
+                             _effort_for(providers[name]), web_search)
 
     fb_name = (llm_cfg.get("fallback_provider") or "").strip()
     if fb_name and fb_name != name and fb_name in providers:
@@ -802,6 +811,7 @@ def create_llm(llm_cfg, env, on_log=None):
         fb_model = (llm_cfg.get("fallback_model") or "").strip()
         if fb_model:
             fb_entry["model"] = fb_model  # フォールバック専用のモデル指定（プロバイダ本来のmodelとは独立）
-        fallback = build_provider(fb_entry, env, temperature, max_tokens, reasoning_effort, web_search)
+        fallback = build_provider(fb_entry, env, temperature, max_tokens,
+                                  _effort_for(fb_entry), web_search)
         return FallbackLLM(primary, fallback, on_log=on_log)
     return primary

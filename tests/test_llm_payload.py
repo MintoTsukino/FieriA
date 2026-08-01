@@ -100,3 +100,81 @@ def test_gemini_explicit_arg_wins_over_unlimited_instance(monkeypatch):
     provider = llm.GeminiLLM(_gemini_entry(), api_key="k", temperature=0.8, max_tokens=0)
     provider.chat([{"role": "user", "content": "hi"}], max_tokens=500)
     assert captured["payload"]["generationConfig"]["maxOutputTokens"] == 500
+
+
+# --- プロバイダentry別のreasoning_effort解決とCodexへのreasoning配線 ---
+
+def test_create_llm_uses_entry_level_reasoning_effort():
+    cfg = {"provider": "opencode_go", "providers": {
+        "opencode_go": {"type": "openai_compat", "base_url": "http://x/v1",
+                        "model": "deepseek-v4", "env_key": "K",
+                        "reasoning_effort": "high"}}}
+    inst = llm.create_llm(cfg, {"K": "dummy"})
+    assert inst.reasoning_effort == "high"
+
+
+def test_create_llm_falls_back_to_global_reasoning_effort():
+    cfg = {"provider": "opencode_go", "reasoning_effort": "low", "providers": {
+        "opencode_go": {"type": "openai_compat", "base_url": "http://x/v1",
+                        "model": "m", "env_key": "K"}}}
+    inst = llm.create_llm(cfg, {"K": "dummy"})
+    assert inst.reasoning_effort == "low"
+
+
+def test_entry_reasoning_effort_beats_global():
+    cfg = {"provider": "opencode_go", "reasoning_effort": "low", "providers": {
+        "opencode_go": {"type": "openai_compat", "base_url": "http://x/v1",
+                        "model": "m", "env_key": "K",
+                        "reasoning_effort": "medium"}}}
+    inst = llm.create_llm(cfg, {"K": "dummy"})
+    assert inst.reasoning_effort == "medium"
+
+
+def test_fallback_provider_uses_its_own_entry_effort():
+    cfg = {"provider": "a", "fallback_provider": "b", "providers": {
+        "a": {"type": "openai_compat", "base_url": "http://x/v1", "model": "m",
+              "env_key": "K", "reasoning_effort": "high"},
+        "b": {"type": "openai_compat", "base_url": "http://y/v1", "model": "m2",
+              "env_key": "K", "reasoning_effort": "low"}}}
+    inst = llm.create_llm(cfg, {"K": "dummy"})
+    assert inst.primary.reasoning_effort == "high"
+    assert inst.fallback.reasoning_effort == "low"
+
+
+def _capture_post_sse(monkeypatch, target_dict):
+    """llm._post_sseを差し替え、渡されたpayloadをtarget_dict["payload"]に記録して
+    target_dict["raw"]（SSE生テキスト）を返す。CodexOAuthLLM._headersも
+    openai_codex_oauth（未ログイン環境で例外を出す）を経由しないダミーに差し替える
+    ——認証状態に依存せずchat()のpayload組み立てだけを検証するため
+    （test_llm_streaming.pyのCodex系テストと同様、認証まわりはバイパスする）。"""
+    def fake_post_sse(url, payload, headers=None, timeout=120):
+        target_dict["payload"] = payload
+        target_dict["url"] = url
+        return target_dict["raw"]
+
+    monkeypatch.setattr(llm, "_post_sse", fake_post_sse)
+    monkeypatch.setattr(llm.CodexOAuthLLM, "_headers", lambda self: {})
+
+
+def _codex_sse_ok():
+    return (
+        "event: response.output_text.delta\n"
+        'data: {"type": "response.output_text.delta", "delta": "ok"}\n\n'
+    )
+
+
+def test_codex_chat_includes_reasoning_effort_in_payload_when_set(monkeypatch):
+    captured = {"raw": _codex_sse_ok()}
+    _capture_post_sse(monkeypatch, captured)
+    provider = llm.CodexOAuthLLM({"model": "gpt-5.5"}, temperature=0.8, max_tokens=2000,
+                                  reasoning_effort="high")
+    provider.chat([{"role": "user", "content": "hi"}])
+    assert captured["payload"]["reasoning"] == {"effort": "high"}
+
+
+def test_codex_chat_omits_reasoning_key_when_effort_unset(monkeypatch):
+    captured = {"raw": _codex_sse_ok()}
+    _capture_post_sse(monkeypatch, captured)
+    provider = llm.CodexOAuthLLM({"model": "gpt-5.5"}, temperature=0.8, max_tokens=2000)
+    provider.chat([{"role": "user", "content": "hi"}])
+    assert "reasoning" not in captured["payload"]
