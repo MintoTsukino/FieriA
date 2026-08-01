@@ -190,3 +190,41 @@ def test_import_one_non_dict_tool_call_does_not_crash(tmp_path):
     assert res["ok"] is True
     rejected = [op for op in res["ops"] if not op["ok"]]
     assert any(op["detail"] == "ツール呼び出しがオブジェクト形式でない" for op in rejected)
+
+
+def _staged_two(tmp_path):
+    sid = _soul()
+    (tmp_path / "a.md").write_text("中身A", encoding="utf-8")
+    (tmp_path / "b.md").write_text("中身B", encoding="utf-8")
+    importer.stage_files(sid, [str(tmp_path / "a.md"), str(tmp_path / "b.md")])
+    return sid
+
+
+def test_run_import_processes_all_and_reports_progress(tmp_path):
+    sid = _staged_two(tmp_path)
+    events = []
+    summary = importer.run_import({}, FakeLLM([TOOL_REPLY, TOOL_REPLY]), sid,
+                                  on_progress=events.append)
+    assert summary == {"total": 2, "done": 2, "failed": [], "stopped": False}
+    assert [e["kind"] for e in events] == ["file_start", "file_done",
+                                           "file_start", "file_done"]
+    assert events[0]["file"] == "a.md" and events[0]["total"] == 2
+    assert importer.list_inbox(sid) == []
+
+
+def test_run_import_cancel_at_file_boundary(tmp_path):
+    sid = _staged_two(tmp_path)
+    summary = importer.run_import({}, FakeLLM([]), sid, should_stop=lambda: True)
+    assert summary == {"total": 2, "done": 0, "failed": [], "stopped": True}
+    assert importer.list_inbox(sid) == ["a.md", "b.md"]
+
+
+def test_run_import_failure_continues_to_next(tmp_path):
+    sid = _staged_two(tmp_path)
+    fake = FakeLLM(["だめ1", "だめ2", TOOL_REPLY])
+    summary = importer.run_import({}, fake, sid)
+    assert summary["total"] == 2
+    assert summary["done"] == 1
+    assert summary["failed"] == [{"file": "a.md",
+                                  "detail": "記憶への書き込みが行われなかった"}]
+    assert importer.list_inbox(sid) == ["a.md"]

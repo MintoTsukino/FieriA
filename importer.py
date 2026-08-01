@@ -205,3 +205,28 @@ def import_one(cfg, llm, soul_id, filename, on_log=None):
     except OSError as e:
         return {"ok": False, "file": filename, "ops": ops, "detail": f"移動失敗: {e}"}
     return {"ok": True, "file": filename, "ops": ops, "detail": ""}
+
+
+def run_import(cfg, llm, soul_id, on_progress=None, should_stop=None):
+    """inboxの全ファイルを順に取り込む。キャンセルはファイル境界でのみ効く。"""
+    files = list_inbox(soul_id)
+    total = len(files)
+    done, failed = 0, []
+    stopped = False
+    for i, fname in enumerate(files):
+        if should_stop and should_stop():
+            stopped = True
+            break
+        if on_progress:
+            on_progress({"kind": "file_start", "file": fname,
+                         "index": i, "total": total})
+        result = import_one(cfg, llm, soul_id, fname)
+        if result["ok"]:
+            done += 1
+        else:
+            failed.append({"file": fname, "detail": result["detail"]})
+        if on_progress:
+            on_progress({"kind": "file_done", "file": fname, "index": i,
+                         "total": total, "ok": result["ok"],
+                         "detail": result["detail"]})
+    return {"total": total, "done": done, "failed": failed, "stopped": stopped}
