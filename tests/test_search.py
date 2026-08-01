@@ -1,0 +1,228 @@
+import os
+import time
+
+
+def _sid():
+    import soul
+    return soul.create_soul("検索テスト")
+
+
+def test_search_finds_wiki_content_by_partial_match():
+    import search, soul
+    sid = _sid()
+    soul.write_file(sid, "wiki/UI談義.md", "きょうはインベントリUIの話をみんとちゃんとした。8枠で決着。")
+    search.ensure_index(sid)
+    hits = search.search(sid, "インベントリ")
+    assert len(hits) == 1
+    assert hits[0]["source"] == "wiki/UI談義.md"
+    assert "インベントリ" in hits[0]["snippet"]
+
+
+def test_search_finds_readings_content_by_partial_match():
+    """readings/（資料層）はwiki等と同じ「soul_dir配下の全.md」走査に乗るだけで
+    索引対象に含まれること（search.pyへの専用コード追加は不要な設計）。"""
+    import search, soul
+    sid = _sid()
+    soul.write_file(sid, "readings/技術書A.md", "この資料には非同期処理の要点がまとめてある。")
+    search.ensure_index(sid)
+    hits = search.search(sid, "非同期処理")
+    assert len(hits) == 1
+    assert hits[0]["source"] == "readings/技術書A.md"
+
+
+def test_search_finds_skill_content_by_partial_match():
+    """skills/（手続き記憶）もwiki/readingsと同じ「soul_dir配下の全.md」走査に乗るだけで
+    索引対象・連想対象に含まれること（search.pyへの専用コード追加は不要な設計）。"""
+    import search, soul
+    sid = _sid()
+    soul.write_skill(sid, "査読手順", "査読の流れ", "まず誤字脱字を洗い出してから内容を見る。")
+    search.ensure_index(sid)
+    hits = search.search(sid, "誤字脱字")
+    assert len(hits) == 1
+    assert hits[0]["source"] == "skills/査読手順.md"
+
+
+def test_search_finds_log_entry_with_who_and_date():
+    import search, soul
+    sid = _sid()
+    soul.append_log(sid, "user", "明日8時に散歩しようね")
+    search.ensure_index(sid)
+    hits = search.search(sid, "散歩")
+    assert len(hits) == 1
+    assert hits[0]["who"] == "user"
+    assert hits[0]["date"] == time.strftime("%Y-%m-%d")
+    assert hits[0]["source"].startswith("logs/")
+
+
+def test_search_empty_query_returns_empty_list():
+    import search
+    sid = _sid()
+    assert search.search(sid, "") == []
+    assert search.search(sid, "   ") == []
+
+
+def test_search_no_match_returns_empty_list():
+    import search, soul
+    sid = _sid()
+    soul.write_file(sid, "wiki/話題A.md", "なんでもない内容")
+    search.ensure_index(sid)
+    assert search.search(sid, "存在しないはずのフレーズXYZ") == []
+
+
+def test_search_before_ensure_index_returns_empty_list_without_crash():
+    import search
+    sid = _sid()
+    # ensure_indexを一度も呼ばない = index.sqliteが存在しない状態
+    assert search.search(sid, "なにか") == []
+
+
+def test_ensure_index_lazy_rebuild_picks_up_new_file():
+    import search, soul
+    sid = _sid()
+    soul.write_file(sid, "wiki/話題A.md", "最初の内容だけ")
+    search.ensure_index(sid)
+    assert search.search(sid, "あとから追加した固有の単語") == []
+
+    # mtime/sizeの変化を確実に検出させるため少し間を置く
+    time.sleep(0.05)
+    soul.write_file(sid, "wiki/話題B.md", "あとから追加した固有の単語がここにある")
+    search.ensure_index(sid)
+    hits = search.search(sid, "あとから追加した固有の単語")
+    assert len(hits) == 1
+    assert hits[0]["source"] == "wiki/話題B.md"
+
+
+def test_ensure_index_no_rebuild_when_nothing_changed():
+    import search, soul
+    sid = _sid()
+    soul.write_file(sid, "wiki/話題A.md", "内容")
+    search.ensure_index(sid)
+    db_path = search._db_path(sid)
+    mtime1 = os.path.getmtime(db_path)
+    time.sleep(0.05)
+    search.ensure_index(sid)  # 何も変わっていないので再構築しない = index.sqlite自体は触らない
+    mtime2 = os.path.getmtime(db_path)
+    assert mtime1 == mtime2
+
+
+def test_short_query_uses_like_fallback_and_finds_two_char_word():
+    # trigramトークナイザは3文字未満のMATCHクエリを常に0件で返す仕様（実機確認済み）。
+    # 「散歩」のような2文字語はLIKEフォールバック経由でないと見つからない。
+    import search, soul
+    sid = _sid()
+    soul.write_file(sid, "wiki/予定.md", "明日8時に散歩しようねという話をした")
+    search.ensure_index(sid)
+    hits = search.search(sid, "散歩")
+    assert len(hits) == 1
+    assert "散歩" in hits[0]["snippet"]
+
+
+def test_short_query_with_like_wildcard_characters_does_not_crash_or_over_match():
+    # LIKEフォールバック経路で query に %/_ が入っても、LIKEのワイルドカードとして
+    # 暴発せず、そのままの文字列として扱われること（ESCAPE句のエスケープ確認）。
+    import search, soul
+    sid = _sid()
+    soul.write_file(sid, "wiki/記号短文.md", "8%引きという表現をここに書いておく")
+    search.ensure_index(sid)
+    hits = search.search(sid, "8%")
+    assert len(hits) == 1
+    hits2 = search.search(sid, "9%")  # 別の数字なので本来ヒットしない
+    assert hits2 == []
+
+
+def test_corrupted_index_db_does_not_crash_and_self_heals():
+    import search, soul
+    sid = _sid()
+    soul.write_file(sid, "wiki/話題A.md", "回復確認用の内容")
+    db_path = search._db_path(sid)
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    with open(db_path, "wb") as f:
+        f.write(b"\x00\x01" + "ゴミバイトでは壊れたsqliteファイルを再現する".encode("utf-8") + b"\xff\xfe")
+
+    # 例外を投げずに完走し、自己修復（再構築）できること
+    search.ensure_index(sid)
+    hits = search.search(sid, "回復確認用")
+    assert len(hits) == 1
+
+
+def test_search_on_broken_index_file_returns_empty_without_ensure_index():
+    import search
+    sid = _sid()
+    db_path = search._db_path(sid)
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    with open(db_path, "wb") as f:
+        f.write(b"\x00not a real sqlite db\xff")
+    assert search.search(sid, "なにか") == []
+
+
+def test_search_query_with_fts5_special_characters_does_not_crash():
+    import search, soul
+    sid = _sid()
+    soul.write_file(sid, "wiki/記号.md", "AND OR NOT みたいな記号入りクエリでも壊れないか確認")
+    search.ensure_index(sid)
+    # FTS5のクエリ構文にひっかかりやすい文字（"-, *, ", 等）を含めても例外を出さない
+    for q in ['AND', '"引用符"', "みたいな-記号*入り", "he said \"hi\""]:
+        search.search(sid, q)  # 例外を投げなければ良い
+
+
+def test_search_memory_tool_via_execute_returns_formatted_hits():
+    import memory_tools as mt
+    import soul
+    sid = _sid()
+    soul.write_file(sid, "wiki/約束.md", "8時に散歩する約束をした")
+    r = mt.execute(sid, {"tool": "search_memory", "query": "散歩"})
+    assert r["ok"]
+    assert "約束" in r["detail"] or "散歩" in r["detail"]
+
+
+def test_search_memory_tool_zero_hits_reports_not_found():
+    import memory_tools as mt
+    sid = _sid()
+    r = mt.execute(sid, {"tool": "search_memory", "query": "ぜったいに存在しないはずの単語列XYZ123"})
+    assert r["ok"]
+    assert "見つからなかった" in r["detail"]
+
+
+class _FakeLLM:
+    """test_engine.pyのFakeLLMと同型（tests/に__init__.pyが無くパッケージ跨ぎimportできない
+    ため、ここでも同じ最小実装を持つ）。chat()が予め積んだ応答を順に返す。"""
+    def __init__(self, replies):
+        self.replies = list(replies)
+        self.calls = []
+
+    def chat(self, messages, max_tokens=None):
+        self.calls.append([dict(m) for m in messages])
+        return self.replies.pop(0)
+
+
+def test_engine_search_memory_feeds_back_and_rereplies():
+    import engine, soul
+
+    sid = soul.create_soul("検索差し戻しテスト", identity_text="テスト用の子。")
+    soul.write_file(sid, "wiki/約束.md", "8時に散歩する約束をした")
+    cfg = {"active_role": None, "fact_layer": {"enabled": True, "custom_text": ""}}
+    fake = _FakeLLM([
+        '調べるじょ\n```fieria-tool\n{"tool": "search_memory", "query": "散歩"}\n```',
+        "散歩の約束、見つけたじょ",
+    ])
+    eng = engine.Engine(cfg, fake, sid)
+    out = eng.process_turn("前に散歩の話してたっけ？")
+    assert out["reply"] == "散歩の約束、見つけたじょ"
+    second_messages = fake.calls[1]
+    assert any("散歩" in m["content"] for m in second_messages)
+
+
+def test_search_finds_notes_history_content():
+    """notes_history/（self_notes/user.mdの全文置換前の退避先）はwiki/readingsと同じ
+    「soul_dir配下の全.md」走査に乗るだけで索引対象に含まれること（search.pyへの
+    専用コード追加は不要な設計。2026-07-22 notes_history新設に伴う回帰テスト）。"""
+    import search, soul
+    sid = _sid()
+    soul.update_self_notes(sid, "最近は落ち着いて執筆に向き合えている。\n")
+    soul.update_self_notes(sid, "改訂後の自己認識。\n")
+
+    search.ensure_index(sid)
+    hits = search.search(sid, "落ち着いて執筆")
+
+    assert len(hits) == 1
+    assert hits[0]["source"].startswith("notes_history/self_notes-")

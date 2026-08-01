@@ -1,0 +1,3078 @@
+<title>FieriA</title>
+<meta charset="utf-8">
+<style>
+  :root {
+    --bg: #ffffff; --bg2: #f5f5f5; --fg: #1a1a1a; --fg-dim: #777;
+    --line: #e0e0e0; --accent: #1a1a1a; --accent-fg: #ffffff; --bubble-user: #1a1a1a; --card-radius: 14px;
+    --shadow: 0 4px 16px rgba(0,0,0,.08); --danger: #a33; --overlay: rgba(0,0,0,.35); --code-bg: #e8e8e8;
+    /* --- ペット（ドット絵マスコット）配色 --- */
+    --pet-body: #ffffff; --pet-ear: #ffffff; --pet-belly: #eef0f3; --pet-cheek: #ffb3c0;
+    --pet-eye: #2a2a2a; --pet-outline: rgba(0,0,0,.18);
+  }
+  :root[data-theme="dark"] {
+    --bg: #1d1e20; --bg2: #313236; --fg: #e8e6e3; --fg-dim: #8a8a8a;
+    --line: #4a4b50; --accent: #424346; --accent-fg: #e8e6e3; --bubble-user: #a8a6a3; --card-radius: 14px;
+    --shadow: 0 4px 16px rgba(0,0,0,.4); --danger: #d9736a; --overlay: rgba(0,0,0,.6); --code-bg: #3a3b40;
+    --pet-body: #e8e6e3; --pet-ear: #e8e6e3; --pet-belly: #cfcdc9; --pet-cheek: #e08fa0;
+    --pet-eye: #1d1e20; --pet-outline: rgba(0,0,0,.5);
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: var(--bg); color: var(--fg);
+    font-family: "Yu Gothic UI", "Meiryo", "Segoe UI", sans-serif;
+    font-size: 15px;
+  }
+  #app {
+    display: grid;
+    grid-template-columns: 200px 1fr 320px;
+    height: 100vh;
+  }
+  /* --- 左ナビ --- */
+  #nav {
+    background: var(--bg2);
+    border-right: 1px solid var(--line);
+    padding: 20px 14px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  #nav .soul-name {
+    font-size: 13px; color: var(--fg-dim);
+    padding: 0 4px 14px 4px; border-bottom: 1px solid var(--line);
+    margin-bottom: 6px; word-break: break-all;
+  }
+  .nav-btn {
+    background: none; border: none; text-align: left;
+    padding: 10px 12px; border-radius: var(--card-radius);
+    font-size: 15px; color: var(--fg); cursor: pointer;
+  }
+  .nav-btn:hover { background: var(--bg); }
+  .nav-btn.active { background: var(--accent); color: var(--accent-fg); }
+
+  /* --- 中央 --- */
+  #center { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .view { display: none; flex: 1; min-height: 0; flex-direction: column; position: relative; }
+  .view.active { display: flex; }
+
+  #role-bar {
+    padding: 14px 24px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 10px; position: relative;
+  }
+  #role-bar .label { color: var(--fg-dim); font-size: 13px; }
+  #role-current {
+    background: var(--bg2); border: 1px solid var(--line); color: var(--fg);
+    border-radius: var(--card-radius); padding: 6px 14px; cursor: pointer;
+    font-size: 14px;
+  }
+  #role-menu {
+    position: absolute; top: 52px; left: 24px; z-index: 10;
+    background: var(--bg); border: 1px solid var(--line);
+    border-radius: var(--card-radius); box-shadow: var(--shadow);
+    min-width: 200px; padding: 6px; display: none;
+  }
+  #role-menu.open { display: block; }
+  #role-menu .item {
+    padding: 10px 12px; border-radius: 10px; cursor: pointer; font-size: 14px;
+  }
+  #role-menu .item:hover { background: var(--bg2); }
+  #role-menu .item.sep { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 12px; color: var(--fg-dim); }
+
+  /* 「区切り」ボタン: role-current(ロール選択)より控えめな見た目にして、
+     普段の操作導線としては地味に置く（頻繁に押すボタンではないため）。 */
+  #break-btn {
+    margin-left: auto; background: transparent; border: 1px solid var(--line);
+    color: var(--fg-dim); border-radius: var(--card-radius); padding: 6px 14px;
+    cursor: pointer; font-size: 13px;
+  }
+  #break-btn:hover:not(:disabled) { background: var(--bg2); color: var(--fg); }
+  #break-btn:disabled { opacity: .5; cursor: default; }
+
+  #chat-log {
+    flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 18px;
+  }
+  .bubble-row { display: flex; }
+  .bubble-row.user { justify-content: flex-end; }
+  /* 区切り線（会話中の"break"マーカー。吹き出しではなく水平線様の表示） */
+  .break-divider {
+    display: flex; align-items: center; gap: 12px; color: var(--fg-dim);
+    font-size: 12px; text-align: center; margin: 4px 0;
+  }
+  .break-divider::before, .break-divider::after {
+    content: ""; flex: 1; border-top: 1px dashed var(--line);
+  }
+  .bubble {
+    max-width: 70%; padding: 14px 18px; border-radius: var(--card-radius);
+    line-height: 1.7; white-space: pre-wrap; word-break: break-word;
+    user-select: text;
+  }
+  .bubble-row.user .bubble { background: var(--bubble-user); color: var(--bg); }
+  .bubble-row.ai .bubble { background: var(--bg2); color: var(--fg); }
+  .bubble-row.system .bubble { background: var(--bg); border: 1px dashed var(--line); color: var(--fg-dim); font-size: 13px; }
+  .bubble-row.system .bubble.error { border: 1px solid var(--danger); color: var(--danger); }
+
+  /* --- AI吹き出しのMarkdown整形（安全な自前パーサが生成したタグのみ対象） --- */
+  .bubble-row.ai .bubble p { margin: 0 0 10px 0; }
+  .bubble-row.ai .bubble p:last-child { margin-bottom: 0; }
+  .bubble-row.ai .bubble h1, .bubble-row.ai .bubble h2, .bubble-row.ai .bubble h3 {
+    margin: 14px 0 8px 0; line-height: 1.4;
+  }
+  .bubble-row.ai .bubble h1:first-child, .bubble-row.ai .bubble h2:first-child,
+  .bubble-row.ai .bubble h3:first-child { margin-top: 0; }
+  .bubble-row.ai .bubble h1 { font-size: 1.25em; }
+  .bubble-row.ai .bubble h2 { font-size: 1.15em; }
+  .bubble-row.ai .bubble h3 { font-size: 1.05em; }
+  .bubble-row.ai .bubble ul, .bubble-row.ai .bubble ol { margin: 0 0 10px 0; padding-left: 22px; }
+  .bubble-row.ai .bubble ul:last-child, .bubble-row.ai .bubble ol:last-child { margin-bottom: 0; }
+  .bubble-row.ai .bubble li { margin: 2px 0; }
+  .bubble-row.ai .bubble a { color: inherit; text-decoration: underline; }
+  .bubble-row.ai .bubble code.md-inline-code {
+    background: var(--code-bg); border-radius: 5px; padding: 1px 6px;
+    font-family: "Consolas", "SF Mono", monospace; font-size: .9em;
+  }
+  .bubble-row.ai .bubble pre.md-code {
+    background: var(--code-bg); border-radius: 8px; padding: 10px 12px; margin: 8px 0;
+    overflow-x: auto; font-family: "Consolas", "SF Mono", monospace; font-size: 13px; line-height: 1.5;
+  }
+  .bubble-row.ai .bubble pre.md-code:last-child { margin-bottom: 0; }
+  .bubble-row.ai .bubble pre.md-code code { background: none; padding: 0; }
+
+  /* --- 考え中インジケータ --- */
+  .thinking-dots { display: inline-flex; gap: 4px; align-items: center; padding: 2px 0; }
+  .thinking-dots span {
+    width: 6px; height: 6px; border-radius: 50%; background: var(--fg-dim);
+    animation: thinking-blink 1.2s infinite ease-in-out both;
+  }
+  .thinking-dots span:nth-child(2) { animation-delay: .2s; }
+  .thinking-dots span:nth-child(3) { animation-delay: .4s; }
+  @keyframes thinking-blink {
+    0%, 80%, 100% { opacity: .25; }
+    40% { opacity: 1; }
+  }
+
+  /* --- ペット（ドット絵マスコット） ---
+     「中で育ってる個体の身体」の位置づけ。チャットビュー右下に常駐する。
+     クリックを一切奪わないよう pointer-events: none（装飾専用）。
+     .pet-body は1x1の透明divにbox-shadowでピクセルを積むテクニックで丸っこい
+     小動物のシルエットを描く（外部画像・ライブラリ不使用のオリジナルデザイン）。
+     状態切替はJSがpet-state-*クラスを付け替えるだけで、動き自体はここのkeyframesが担う。 */
+  #pet-widget {
+    /* --pet-size/--pet-right/--pet-bottomは#chat-view側で設定される（下のホバー領域と
+       兄弟関係で共有するため。詳細はホバー領域のコメント参照）。既定値は変更前と
+       同じ64px/20px/92pxなので、JS未適用時（万一の初期描画タイミング）でも見た目は変わらない。 */
+    position: absolute; right: var(--pet-right, 20px); bottom: var(--pet-bottom, 92px); z-index: 5;
+    width: var(--pet-size, 64px); height: var(--pet-size, 64px); pointer-events: none;
+    transition: right .12s ease, bottom .12s ease;
+  }
+  #pet-widget.pet-hidden { display: none; }
+  #pet-widget.pet-dragging { transition: none; } /* ドラッグ中は追従を1:1にする（イージングで遅延させない） */
+  #pet-widget .pet-stage {
+    position: relative; width: var(--pet-size, 64px); height: var(--pet-size, 64px);
+    filter: drop-shadow(0 2px 2px var(--pet-outline));
+  }
+  #pet-widget .pet-body {
+    position: absolute; left: 0; top: 0; width: 4px; height: 4px; background: transparent;
+  }
+  #pet-widget .pet-eye {
+    position: absolute; width: 4px; height: 4px; background: var(--pet-eye);
+    animation: pet-blink 4.2s infinite;
+  }
+  #pet-widget .pet-eye-l { left: 12px; top: 16px; }
+  #pet-widget .pet-eye-r { left: 32px; top: 16px; }
+  #pet-widget .pet-error-eyes { display: none; }
+  #pet-widget .pet-x {
+    position: absolute; font-size: 9px; line-height: 1; color: var(--pet-eye);
+    font-family: "Consolas", monospace;
+  }
+  #pet-widget .pet-x-l { left: 10px; top: 12px; }
+  #pet-widget .pet-x-r { left: 30px; top: 12px; }
+  #pet-widget .pet-sparkle {
+    position: absolute; left: 30px; top: -10px; font-size: 13px; opacity: 0; user-select: none;
+  }
+  #pet-widget .pet-pen {
+    position: absolute; left: 44px; top: 20px; width: 4px; height: 10px;
+    background: var(--fg-dim); border-radius: 2px; opacity: 0; transform-origin: top center;
+  }
+  #pet-widget .pet-skin-img {
+    position: absolute; left: 0; top: 0; width: var(--pet-size, 64px); height: var(--pet-size, 64px);
+    image-rendering: pixelated; display: none;
+    /* 割り切り: 画像は--pet-sizeに追従して伸縮させるが、非整数倍スケール（64px設計に
+       対し48〜128pxを8px刻みで指定できるため）になっても気にしない。ドット絵が
+       多少にじんでも、パーツごとに再配置する複雑さより単純な伸縮を優先した。
+       直下の.pet-body/.pet-eye等（box-shadowで描くCSS側の顔パーツ）は同じ理由で
+       64px設計時の固定オフセットのままにしている（サイズ変更に追従しない）。 */
+  }
+  /* skinのPNGがある状態はCSSピクセルアート（.pet-body等）を隠し、img側だけ出す */
+  #pet-widget.pet-has-skin .pet-body,
+  #pet-widget.pet-has-skin .pet-eye,
+  #pet-widget.pet-has-skin .pet-pen,
+  #pet-widget.pet-has-skin .pet-sparkle,
+  #pet-widget.pet-has-skin .pet-error-eyes { display: none; }
+  #pet-widget.pet-has-skin .pet-skin-img { display: block; }
+
+  @keyframes pet-blink {
+    0%, 92%, 100% { transform: scaleY(1); }
+    96% { transform: scaleY(.1); }
+  }
+  @keyframes pet-idle-float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-3px); }
+  }
+  @keyframes pet-thinking-fidget {
+    0%, 100% { transform: rotate(0deg) translateX(0); }
+    25% { transform: rotate(-4deg) translateX(-1px); }
+    75% { transform: rotate(4deg) translateX(1px); }
+  }
+  @keyframes pet-writing-bob {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-2px); }
+  }
+  @keyframes pet-pen-scribble {
+    0%, 100% { transform: rotate(-8deg); }
+    50% { transform: rotate(8deg); }
+  }
+  @keyframes pet-recall-hop {
+    0%, 100% { transform: translateY(0); }
+    30% { transform: translateY(-9px); }
+    50% { transform: translateY(0); }
+  }
+  @keyframes pet-sparkle-pop {
+    0% { opacity: 0; transform: translateY(2px) scale(.6); }
+    40% { opacity: 1; transform: translateY(-4px) scale(1); }
+    100% { opacity: 0; transform: translateY(-10px) scale(.8); }
+  }
+  @keyframes pet-error-shake {
+    0%, 100% { transform: translateX(0); }
+    20% { transform: translateX(-3px); }
+    40% { transform: translateX(3px); }
+    60% { transform: translateX(-2px); }
+    80% { transform: translateX(2px); }
+  }
+
+  #pet-widget.pet-idle .pet-stage { animation: pet-idle-float 3.2s ease-in-out infinite; }
+
+  #pet-widget.pet-thinking .pet-stage { animation: pet-thinking-fidget 1.1s ease-in-out infinite; }
+
+  #pet-widget.pet-writing .pet-stage { animation: pet-writing-bob .35s ease-in-out infinite; }
+  #pet-widget.pet-writing .pet-pen { opacity: 1; animation: pet-pen-scribble .3s ease-in-out infinite; }
+
+  #pet-widget.pet-recall .pet-stage { animation: pet-recall-hop .6s ease-out 1; }
+  #pet-widget.pet-recall .pet-sparkle { animation: pet-sparkle-pop .9s ease-out 1; }
+
+  #pet-widget.pet-error .pet-stage { animation: pet-error-shake .4s ease-in-out 2; }
+  #pet-widget.pet-error .pet-eye { display: none; }
+  #pet-widget.pet-error .pet-error-eyes { display: block; }
+  /* なでなで(love): ハートはスキン差し替え時も共通で出すCSSオーバーレイ
+     （PNG側には描かれていないため、has-skinの非表示リストに入れない） */
+  #pet-widget .pet-hearts { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; }
+  #pet-widget .pet-hearts span {
+    position: absolute; bottom: 60%; font-size: 11px; color: #e0708a; opacity: 0;
+    text-shadow: 0 0 2px rgba(224, 112, 138, .5);
+  }
+  #pet-widget .pet-hearts span:nth-child(1) { left: 12%; }
+  #pet-widget .pet-hearts span:nth-child(2) { left: 44%; font-size: 14px; }
+  #pet-widget .pet-hearts span:nth-child(3) { left: 72%; }
+  #pet-widget.pet-love .pet-stage { animation: pet-love-wiggle .5s ease-in-out 2; }
+  #pet-widget.pet-love .pet-hearts span { animation: pet-heart-float 1.4s ease-out 1; }
+  #pet-widget.pet-love .pet-hearts span:nth-child(2) { animation-delay: .15s; }
+  #pet-widget.pet-love .pet-hearts span:nth-child(3) { animation-delay: .3s; }
+  @keyframes pet-love-wiggle {
+    0%, 100% { transform: rotate(0deg); }
+    25% { transform: rotate(-4deg); }
+    75% { transform: rotate(4deg); }
+  }
+  @keyframes pet-heart-float {
+    0% { opacity: 0; transform: translateY(4px) scale(.6); }
+    25% { opacity: 1; }
+    100% { opacity: 0; transform: translateY(-26px) scale(1.05); }
+  }
+
+  /* --- ペットのドラッグ移動: ホバー検知＋つまみ ---
+     #pet-widget自体はクリックを一切奪わないpointer-events:noneのままなので、
+     ペットの上にマウスを乗せたことも、ドラッグでの掴みも本体側では検知できない。
+     #pet-hover-zoneをペットと全く同じ矩形（--pet-size/--pet-right/--pet-bottomを
+     共有）に重ね、pointer-events:autoでホバー検知とドラッグ操作の両方をここ1枚で
+     引き受ける。
+     割り切り（実装済みの選択）: 「つまみ部分以外はクリックを透過させる」という
+     精密版までは実装せず、hover-zoneの矩形全体でクリックを奪う簡易版を採用した。
+     ペットは画面隅の小領域に限られ、その真下に重要な操作要素が来ることは通常
+     無いため実害は小さいと判断（タスク仕様が明示的に許容する簡略化）。
+     --pet-size等のCSS変数は#pet-widget自身ではなく共通の親(#chat-view)に置く
+     （#pet-hover-zoneは#pet-widgetの兄弟要素なので、#pet-widgetにだけ変数を
+     設定しても継承されないため。JS側のapplyPetSizeVar/applyPetPosVars参照）。 */
+  #pet-hover-zone {
+    position: absolute; right: var(--pet-right, 20px); bottom: var(--pet-bottom, 92px);
+    width: var(--pet-size, 64px); height: var(--pet-size, 64px); z-index: 6;
+    background: transparent; cursor: grab; touch-action: none;
+    transition: right .12s ease, bottom .12s ease;
+  }
+  #pet-hover-zone.pet-hidden { display: none; }
+  #pet-hover-zone.pet-dragging { transition: none; cursor: grabbing; }
+  /* つまみ（⠿グリフ）。hover-zoneの子要素として頭上（負のtopオフセット）に配置する。
+     通常は不可視(opacity:0)、hover-zoneのホバー中またはドラッグ中だけ浮き上がる。 */
+  #pet-handle {
+    position: absolute; left: 50%; top: -18px; transform: translateX(-50%);
+    width: 20px; height: 14px; pointer-events: auto;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; line-height: 1; color: var(--fg-dim);
+    background: var(--bg2); border: 1px solid var(--line); border-radius: 4px;
+    opacity: 0; transition: opacity .15s ease; user-select: none;
+  }
+  #pet-hover-zone:hover #pet-handle,
+  #pet-hover-zone.pet-dragging #pet-handle { opacity: 1; }
+
+  .ops {
+    margin-top: 8px; max-width: 70%; font-size: 13px; color: var(--fg-dim);
+    user-select: text;
+  }
+  .ops summary { cursor: pointer; padding: 4px 0; }
+  .ops .op-line { padding: 4px 0 4px 12px; }
+  .ops .op-line.fail { color: var(--danger); }
+
+  #compose {
+    border-top: 1px solid var(--line); padding: 16px 24px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  #attach-preview {
+    display: flex; gap: 8px; flex-wrap: wrap;
+  }
+  #attach-preview:empty { display: none; }
+  .attach-thumb {
+    position: relative; width: 56px; height: 56px; border-radius: 10px; overflow: hidden;
+    border: 1px solid var(--line); flex-shrink: 0;
+  }
+  .attach-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .attach-pdf-chip {
+    width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
+    background: var(--overlay); color: var(--fg); font-size: 12px; font-weight: 600;
+  }
+  .bubble-row.user .bubble .bubble-imgs .bubble-pdf-chip {
+    width: 56px; height: 56px; border-radius: 10px; border: 1px solid var(--line);
+  }
+  .attach-thumb .attach-remove {
+    position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border-radius: 50%;
+    background: var(--overlay); color: var(--accent-fg); border: none; font-size: 11px; line-height: 18px;
+    padding: 0; cursor: pointer; text-align: center;
+  }
+  #compose-row {
+    display: flex; gap: 10px; align-items: flex-end;
+  }
+  #attach-btn {
+    background: none; border: 1px solid var(--line); color: var(--fg);
+    border-radius: var(--card-radius); font-size: 18px; cursor: pointer;
+    width: 46px; height: 46px; flex-shrink: 0; line-height: 1;
+  }
+  #attach-btn:disabled { opacity: .4; cursor: default; }
+  #compose-row textarea {
+    flex: 1; resize: none; border: 1px solid var(--line); border-radius: var(--card-radius);
+    padding: 12px 14px; font-size: 15px; font-family: inherit; color: var(--fg);
+    background: var(--bg); min-height: 46px; max-height: 40vh;
+    overflow-y: auto; line-height: 1.5;
+  }
+  #compose-row button#send-btn {
+    background: var(--accent); color: var(--accent-fg); border: none;
+    border-radius: var(--card-radius); padding: 12px 22px; font-size: 15px; cursor: pointer;
+  }
+  #compose-row button:disabled { opacity: .4; cursor: default; }
+  .turn-status-chip {
+    font-size: 12px; color: var(--fg-dim); margin: 4px 0 0 6px; user-select: none;
+  }
+  .attach-error { font-size: 12px; color: var(--danger); }
+  .attach-error:empty { display: none; }
+  .bubble-row.user .bubble .bubble-imgs {
+    display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px;
+  }
+  .bubble-row.user .bubble .bubble-imgs img {
+    max-width: 160px; max-height: 160px; border-radius: 10px; display: block;
+  }
+
+  /* --- 記憶ビュー / ログビュー（共通ペイン構造） --- */
+  #memory-view, #logs-view { flex-direction: row; }
+  #mem-tree, #log-tree {
+    width: 240px; border-right: 1px solid var(--line); overflow-y: auto; padding: 18px;
+  }
+  #mem-tree .file-item, #log-tree .file-item {
+    padding: 8px 10px; border-radius: 10px; cursor: pointer; font-size: 13px;
+    color: var(--fg-dim); word-break: break-all;
+  }
+  #mem-tree .file-item:hover, #mem-tree .file-item.active,
+  #log-tree .file-item:hover, #log-tree .file-item.active { background: var(--bg2); color: var(--fg); }
+  #mem-body, #log-body { flex: 1; overflow-y: auto; padding: 24px; white-space: pre-wrap; line-height: 1.8; user-select: text; }
+  #mem-body.empty, #log-body.empty { color: var(--fg-dim); }
+  #log-body.log-view { white-space: normal; display: flex; flex-direction: column; gap: 10px; }
+
+  /* --- 設定ビュー --- */
+  #settings-view { overflow-y: auto; padding: 24px; flex-direction: column; gap: 20px; }
+  .card {
+    background: var(--bg2); border-radius: var(--card-radius); padding: 20px; margin-bottom: 18px;
+  }
+  .card h3 { margin: 0 0 14px 0; font-size: 15px; }
+  .card .row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .card label { font-size: 13px; color: var(--fg-dim); min-width: 90px; }
+  .card input[type=text], .card input[type=password], .card input[type=number], .card select, .card textarea {
+    flex: 1; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px;
+    font-size: 14px; font-family: inherit; background: var(--bg); color: var(--fg);
+  }
+  .card input[type=range] { flex: 1; }
+  .card .row span.value-label { font-size: 13px; color: var(--fg-dim); min-width: 42px; text-align: right; }
+  .card textarea.small { min-height: 60px; resize: vertical; }
+  .card textarea.wide { min-height: 90px; resize: vertical; }
+  .card button {
+    background: var(--accent); color: var(--accent-fg); border: none; border-radius: 10px;
+    padding: 8px 16px; font-size: 13px; cursor: pointer;
+  }
+  .card button.ghost {
+    background: none; color: var(--fg-dim); border: 1px solid var(--line);
+  }
+  .card button:disabled { opacity: .4; cursor: default; }
+  .list-item {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 10px; border-radius: 10px;
+  }
+  .list-item:hover { background: var(--bg); }
+  .list-item .name { font-size: 14px; }
+  .list-item .name.active-tag::after { content: " ・使用中"; color: var(--fg-dim); font-size: 12px; }
+  .list-item .btns { display: flex; gap: 6px; }
+  .hint { font-size: 12px; color: var(--fg-dim); margin-top: 4px; }
+  #model-list-box {
+    max-height: 200px; overflow-y: auto; border: 1px solid var(--line);
+    border-radius: 10px; margin-top: 4px; margin-bottom: 8px; background: var(--bg);
+  }
+  #model-list-box .model-item { padding: 8px 10px; font-size: 13px; cursor: pointer; color: var(--fg); }
+  #model-list-box .model-item:hover { background: var(--bg2); }
+  .apikey-row { align-items: center; flex-wrap: wrap; gap: 8px; }
+  .apikey-row .apikey-info { display: flex; flex-direction: column; gap: 2px; min-width: 150px; }
+  .apikey-row input[type=password] { flex: 1; min-width: 160px; margin: 0; }
+  .badge { font-size: 12px; padding: 2px 8px; border-radius: 8px; white-space: nowrap; }
+  .badge.set { color: var(--fg); border: 1px solid var(--fg); }
+  .badge.unset { color: var(--fg-dim); border: 1px solid var(--line); }
+  .toggle-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .toggle-row input[type=checkbox] { width: 18px; height: 18px; }
+
+  /* --- 右パネル --- */
+  #side { border-left: 1px solid var(--line); padding: 20px; overflow-y: auto; min-height: 0; }
+  #side h4 { font-size: 13px; color: var(--fg-dim); margin: 0 0 10px 0; font-weight: normal; }
+  #side .card { padding: 14px; }
+  #diary-body { white-space: pre-wrap; line-height: 1.7; font-size: 13px; }
+  #diary-body.empty { color: var(--fg-dim); }
+  #side-files .file-item { padding: 6px 8px; font-size: 12px; }
+  #side-files .file-group { font-size: 12px; }
+  #side-files .file-group summary { cursor: pointer; padding: 6px 8px; color: var(--fg-dim); }
+  #side-files .file-group summary:hover { color: var(--fg); }
+  #side-files .file-group .file-item { padding-left: 20px; }
+
+  /* --- モーダル --- */
+  #modal-overlay {
+    display: none; position: fixed; inset: 0; background: var(--overlay);
+    align-items: center; justify-content: center; z-index: 100;
+  }
+  #modal-overlay.open { display: flex; }
+  #modal-box {
+    background: var(--bg); border-radius: var(--card-radius); width: 560px; max-height: 70vh;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  #modal-title { padding: 16px 20px; border-bottom: 1px solid var(--line); font-size: 14px; color: var(--fg-dim); }
+  #modal-body { padding: 20px; overflow-y: auto; white-space: pre-wrap; line-height: 1.8; }
+  #modal-close {
+    align-self: flex-end; margin: 12px 16px; background: var(--bg2); border: none;
+    border-radius: 10px; padding: 6px 14px; cursor: pointer; color: var(--fg);
+  }
+
+  #boot-guard {
+    position: fixed; inset: 0; background: var(--bg); display: flex;
+    align-items: center; justify-content: center; flex-direction: column; gap: 16px;
+    z-index: 50; text-align: center; padding: 20px;
+  }
+  #boot-guard.hidden { display: none; }
+  #boot-guard p { color: var(--fg-dim); max-width: 360px; line-height: 1.7; }
+  #boot-guard button {
+    background: var(--accent); color: var(--accent-fg); border: none; border-radius: var(--card-radius);
+    padding: 12px 24px; font-size: 14px; cursor: pointer;
+  }
+
+  /* --- トースト通知（設定画面の保存系操作専用。非モーダル・自動消滅） --- */
+  #toast {
+    position: fixed; left: 50%; bottom: 32px; z-index: 200;
+    transform: translateX(-50%) translateY(8px);
+    background: var(--bg2); color: var(--fg); box-shadow: var(--shadow);
+    border-radius: var(--card-radius); padding: 10px 20px; font-size: 13px;
+    max-width: 360px; text-align: center; word-break: break-word;
+    opacity: 0; pointer-events: none;
+    transition: opacity .25s ease, transform .25s ease;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  #toast.error { border: 1px solid var(--danger); color: var(--danger); }
+</style>
+
+<div id="app">
+  <nav id="nav">
+    <div class="soul-name" id="soul-name-label">SOUL未選択</div>
+    <button class="nav-btn active" data-view="chat">チャット</button>
+    <button class="nav-btn" data-view="memory">記憶</button>
+    <button class="nav-btn" data-view="logs">ログ</button>
+    <button class="nav-btn" data-view="settings">設定</button>
+  </nav>
+
+  <div id="center">
+    <!-- チャットビュー -->
+    <div class="view active" id="chat-view">
+      <div id="role-bar">
+        <span class="label">ロール</span>
+        <button id="role-current">（未設定）</button>
+        <div id="role-menu"></div>
+        <button id="break-btn" title="ここまでの文脈をリセットする（会話はログに残る）">区切り</button>
+      </div>
+      <div id="chat-log"></div>
+      <div id="pet-widget" class="pet-idle pet-hidden" aria-hidden="true" title="コノハ">
+        <div class="pet-stage">
+          <div class="pet-body"></div>
+          <div class="pet-eye pet-eye-l"></div>
+          <div class="pet-eye pet-eye-r"></div>
+          <div class="pet-error-eyes">
+            <span class="pet-x pet-x-l">×</span>
+            <span class="pet-x pet-x-r">×</span>
+          </div>
+          <div class="pet-sparkle">✨</div>
+        <div class="pet-hearts" aria-hidden="true"><span>♥</span><span>♥</span><span>♥</span></div>
+          <div class="pet-pen"></div>
+          <img class="pet-skin-img" alt="">
+        </div>
+      </div>
+      <div id="pet-hover-zone" class="pet-hidden" title="ドラッグでコノハを移動">
+        <div id="pet-handle" aria-hidden="true">⠿</div>
+      </div>
+      <div id="compose">
+        <div class="attach-error" id="attach-error"></div>
+        <div id="attach-preview"></div>
+        <div id="compose-row">
+          <button id="attach-btn" type="button" title="画像/PDFを添付">📎</button>
+          <input type="file" id="attach-file-input" accept="image/*,.pdf" multiple hidden>
+          <textarea id="input-box" placeholder="ここに話しかける…（Enterで改行、2回で送信）" rows="1"></textarea>
+          <button id="send-btn">送信</button>
+        </div>
+        <div class="hint" id="send-hint" style="display:none;">もう一度Enterで送信</div>
+      </div>
+    </div>
+
+    <!-- 記憶ビュー -->
+    <div class="view" id="memory-view">
+      <div id="mem-tree"></div>
+      <div id="mem-body" class="empty">左のファイル一覧から選ぶとここに表示される</div>
+    </div>
+
+    <!-- ログビュー -->
+    <div class="view" id="logs-view">
+      <div id="log-tree"></div>
+      <div id="log-body" class="empty">左の日付一覧から選ぶとここに表示される</div>
+    </div>
+
+    <!-- 設定ビュー -->
+    <div class="view" id="settings-view">
+      <div class="card" id="soul-card">
+        <h3>SOUL管理</h3>
+        <div id="soul-list"></div>
+        <div style="margin-top:14px;">
+          <div class="row"><label>名前</label><input type="text" id="new-soul-name" placeholder="空欄でOK（名前は後で本人と相談して決められる）"></div>
+          <div class="row" style="align-items:flex-start;">
+            <label>identity</label>
+            <textarea class="small" id="new-soul-identity" placeholder="最初の種だけ。人格は記憶が育てていく"></textarea>
+          </div>
+          <div class="row" style="align-items:flex-start;">
+            <label>口調</label>
+            <textarea class="small" id="new-soul-speech" placeholder="口調・話し方のクセ（任意）。例: 語尾に〜じょをつける、タメ口"></textarea>
+          </div>
+          <div class="row" id="new-soul-inherit-row" style="display:none;">
+            <label>ユーザー理解を引き継ぐ</label>
+            <select id="new-soul-inherit-user">
+              <option value="">引き継がない</option>
+            </select>
+          </div>
+          <button id="create-soul-btn">SOULを作る</button>
+          <button class="ghost" id="clear-soul-form-btn">クリア</button>
+        </div>
+      </div>
+
+      <div class="card" id="role-card">
+        <h3>ロール管理</h3>
+        <div class="toggle-row">
+          <input type="checkbox" id="auto-role-switch-enabled">
+          <label style="min-width:auto;">ロールの自動切替・提案を許可（AIが会話の流れで自分から切り替えたり、新しいロールを提案したりする）</label>
+        </div>
+        <div class="toggle-row">
+          <input type="checkbox" id="skill-auto-create-enabled">
+          <label style="min-width:auto;">スキルの自律作成を許可（同意なしでAIが自分の判断でスキル化してよい。既定は先に提案→同意）</label>
+        </div>
+        <div id="role-list"></div>
+        <div style="margin-top:14px;">
+          <div class="row"><label>名前</label><input type="text" id="role-name-input" placeholder="ロール名"></div>
+          <div class="row" style="align-items:flex-start;">
+            <label>内容</label>
+            <textarea class="wide" id="role-prompt-input" placeholder="今回の仕事・文脈を書く。性格はSOULが持っている"></textarea>
+          </div>
+          <button id="save-role-btn">保存</button>
+          <button class="ghost" id="clear-role-form-btn">クリア</button>
+        </div>
+      </div>
+
+      <div class="card" id="fact-card">
+        <h3>事実層</h3>
+        <div class="toggle-row">
+          <input type="checkbox" id="fact-enabled">
+          <label style="min-width:auto;">今日の日付・簡単な事実情報を会話に添える</label>
+        </div>
+        <textarea class="wide" id="fact-custom-text" placeholder="事実層に追加したい文言（任意）"></textarea>
+        <div style="margin-top:10px;"><button id="save-fact-btn">保存</button></div>
+        <details style="margin-top:10px;">
+          <summary>標準の文言を見る</summary>
+          <div class="hint">カスタム文言が空のとき、この標準文言が使われます</div>
+          <div id="fact-default-text" style="white-space:pre-wrap;"></div>
+        </details>
+      </div>
+
+      <div class="card" id="prompt-inspector-card">
+        <h3>プロンプト透視</h3>
+        <div class="hint">事実層・SOUL・記憶・ロール・ツール仕様——フィエリアに毎ターン渡っている全文です</div>
+        <div style="margin-top:10px;"><button id="show-prompt-btn">いまの注入内容を見る</button></div>
+      </div>
+
+      <div class="card" id="workspace-card">
+        <h3>作業フォルダ</h3>
+        <div class="row">
+          <label>フォルダパス</label>
+          <input type="text" id="workspace-dir-input" placeholder="例: C:\Users\...\執筆メモ">
+        </div>
+        <div style="margin-top:10px;"><button id="save-workspace-btn">保存</button></div>
+        <div class="hint">指定すると、AIがこのフォルダの.md/.txt/.html/.css/.jsを会話中に読み書きできるようになります（.bak退避つき）。空欄で機能OFF。記事や原稿の専用フォルダを指定してください（ドライブ直下などの巨大フォルダは非推奨）</div>
+      </div>
+
+      <div class="card" id="auto-recall-card">
+        <h3>連想記憶（自動で思い出す）</h3>
+        <div class="toggle-row">
+          <input type="checkbox" id="auto-recall-enabled">
+          <label style="min-width:auto;">発言に関連する記憶を自動で思い出す（既存の記憶検索を裏で実行してプロンプトに差し込む）</label>
+        </div>
+        <div class="row">
+          <label>件数</label>
+          <input type="number" id="auto-recall-max-hits" min="1" max="10" step="1">
+        </div>
+        <div style="margin-top:10px;"><button id="save-auto-recall-btn">保存</button></div>
+        <div class="hint">聞かれる前に思い出す機能。関連度は簡易ランクのため外れることもあります（AIには「関係なければ無視してよい」と伝えています）。正確な内容が必要ならAIはread_memoryで全文を読みます</div>
+      </div>
+
+      <div class="card" id="pet-card">
+        <h3>ペット</h3>
+        <div class="toggle-row">
+          <input type="checkbox" id="pet-enabled-checkbox">
+          <label style="min-width:auto;">ペットを表示（チャット画面隅の小さなマスコット。アプリの状態と連動して動く）</label>
+        </div>
+        <div class="row">
+          <label>大きさ</label>
+          <select id="pet-character-select" style="margin-bottom:8px;">
+            <option value="konoha">コノハ（黒・記憶のかけら）</option>
+            <option value="mokora">モコラ（白・メモリの妖精）</option>
+          </select>
+          <input type="range" id="pet-size-input" min="48" max="128" step="8">
+          <span id="pet-size-value" class="value-label">64px</span>
+        </div>
+        <div style="margin-top:10px;"><button id="save-pet-size-btn">保存</button></div>
+        <div class="hint">チャット画面のペットにマウスを重ねるとつまみ（⠿）が出て、ドラッグで好きな位置に動かせます（位置はドラッグ終了時に自動保存、大きさは上のスライダー＋保存ボタン）</div>
+      </div>
+
+      <div class="card" id="theme-card">
+        <h3>テーマ</h3>
+        <div class="row">
+          <label>表示</label>
+          <select id="theme-select">
+            <option value="light">ライト</option>
+            <option value="dark">ダーク</option>
+          </select>
+        </div>
+        <div class="toggle-row" style="margin-top:12px;">
+          <input type="checkbox" id="streaming-enabled-checkbox">
+          <label style="min-width:auto;">ストリーミング表示（文字が流れて出る。OFFで従来どおり全文完成後に一括表示）</label>
+        </div>
+        <div class="hint" style="margin-top:4px;">
+          ※フォールバックプロバイダを設定している場合、ONでも一括表示になる（切替の安全性を優先する仕様）
+        </div>
+      </div>
+
+      <div class="card" id="provider-card">
+        <h3>プロバイダ</h3>
+        <div class="row">
+          <label>プロバイダ</label>
+          <select id="provider-select"></select>
+        </div>
+        <div class="row">
+          <label>モデル名</label>
+          <input type="text" id="provider-model">
+          <button class="ghost" id="list-models-btn">一覧から選ぶ</button>
+        </div>
+        <div id="model-list-box" style="display:none;"></div>
+        <div class="hint" id="model-list-msg"></div>
+        <div class="row" id="provider-baseurl-row" style="display:none;">
+          <label>base_url</label>
+          <input type="text" id="provider-baseurl">
+        </div>
+        <div class="row">
+          <label>最大出力トークン</label>
+          <input type="number" id="provider-maxtokens" min="256" step="256">
+        </div>
+        <div class="toggle-row">
+          <input type="checkbox" id="provider-maxtokens-unlimited">
+          <label style="min-width:auto;">モデルに任せる（上限を指定しない）</label>
+        </div>
+        <div class="hint">ONにすると上限を指定せず、モデルの既定上限まで書けます</div>
+        <div class="hint">1回の返信の長さの上限。長文（記事執筆など）は8192以上推奨。暴走時の保険を兼ねるため空にはできない</div>
+        <div class="row">
+          <label>日記の最大トークン</label>
+          <input type="number" id="wrapup-maxtokens" min="256" step="256">
+        </div>
+        <div class="toggle-row">
+          <input type="checkbox" id="wrapup-maxtokens-unlimited">
+          <label style="min-width:auto;">モデルに任せる（上限を指定しない）</label>
+        </div>
+        <div class="hint">1日の終わりに書かれる日記の長さの上限</div>
+        <div class="row">
+          <label>コンテキスト上限（圧縮のしきい値）</label>
+          <input type="number" id="context-limit-tokens" min="256" step="256">
+        </div>
+        <div class="toggle-row">
+          <input type="checkbox" id="context-limit-tokens-unlimited">
+          <label style="min-width:auto;">無制限（モデルに任せる）</label>
+        </div>
+        <div class="hint">会話がこの概算トークン数を超えると、古い部分を自動で要約に畳みます。0/チェックONで圧縮しない</div>
+        <div class="hint">モデル名や使用プロバイダの切替はここ。APIキー自体は下の「APIキー」カードから登録する。</div>
+
+        <div class="toggle-row" style="margin-top:12px;">
+          <input type="checkbox" id="web-search-checkbox">
+          <label style="min-width:auto;">Web検索を許可（Gemini: Google検索グラウンディング / Grok: Live Search）</label>
+        </div>
+        <div class="hint">※プロバイダ側で検索ごとの課金が発生しうる（Geminiは無料枠超過後に従量課金）。既定OFF。対応外のプロバイダ（Ollama等）では無視される</div>
+
+        <h4>フォールバック</h4>
+        <div class="row">
+          <label>フォールバック先</label>
+          <select id="fallback-provider-select"></select>
+        </div>
+        <div class="row">
+          <label>モデル名</label>
+          <input type="text" id="fallback-model" placeholder="空=フォールバック先の既定モデル">
+          <button class="ghost" id="list-fallback-models-btn">一覧から選ぶ</button>
+        </div>
+        <div id="fallback-model-list-box" style="display:none;"></div>
+        <div class="hint" id="fallback-model-list-msg"></div>
+        <div class="hint">メインのAIが失敗（レート制限・障害）したとき、自動でこちらに切り替えて応答します</div>
+
+        <div style="margin-top:10px;"><button id="save-provider-btn">保存</button></div>
+      </div>
+
+      <div class="card" id="oauth-card" style="display:none;">
+        <h3>ログイン</h3>
+        <div id="oauth-row-xai" style="display:none;">
+          <div class="row">
+            <label>Grok</label>
+            <span class="badge unset" id="xai-oauth-badge">未ログイン</span>
+          </div>
+          <div class="hint">ボタンを押すとブラウザが開く。XアカウントでログインしてFieriAを許可する（X Premium+ か SuperGrokの契約が必要。APIキーは不要）。</div>
+          <div class="row" style="margin-top:8px;">
+            <button id="xai-login-btn">ログイン</button>
+            <button class="ghost" id="xai-logout-btn">ログアウト</button>
+          </div>
+          <div class="row" id="xai-code-row" style="margin-top:10px;">
+            <label>手動コード</label>
+            <input type="text" id="xai-code-input" placeholder="ブラウザに表示されたコードを貼る">
+            <button id="xai-code-submit-btn">確定</button>
+          </div>
+          <div class="hint">ブラウザで「コードをコピーして」と出た場合だけ、ここに貼って確定する。</div>
+          <div class="hint" id="xai-oauth-msg"></div>
+        </div>
+        <div id="oauth-row-codex" style="display:none;">
+          <div class="row">
+            <label>ChatGPT</label>
+            <span class="badge unset" id="codex-oauth-badge">未ログイン</span>
+          </div>
+          <div class="hint">ボタンを押すとブラウザが開く。ChatGPTアカウントでログインしてFieriAを許可する（Plus/Pro/Team/Enterpriseの契約が必要。APIキーは不要。非公式な借用方式のため将来使えなくなる可能性あり）。</div>
+          <div class="row" style="margin-top:8px;">
+            <button id="codex-login-btn">ログイン</button>
+            <button class="ghost" id="codex-logout-btn">ログアウト</button>
+          </div>
+          <div class="row" id="codex-code-row" style="margin-top:10px;">
+            <label>手動コード</label>
+            <input type="text" id="codex-code-input" placeholder="ブラウザに表示されたコードを貼る">
+            <button id="codex-code-submit-btn">確定</button>
+          </div>
+          <div class="hint">ブラウザで「コードをコピーして」と出た場合だけ、ここに貼って確定する。</div>
+          <div class="hint" id="codex-oauth-msg"></div>
+        </div>
+      </div>
+
+      <div class="card" id="apikey-card">
+        <h3>APIキー</h3>
+        <div id="apikey-list"></div>
+        <div class="hint">キーは .env に保存される（config.jsonには書かない）。一度保存した値はこの画面に表示されない。</div>
+      </div>
+
+      <div class="card" id="backup-card">
+        <h3>バックアップ</h3>
+        <div class="row"><button id="backup-btn">魂をバックアップ</button></div>
+        <div class="hint" id="backup-result" style="user-select: text;"></div>
+        <div class="hint">souls・config・rolesを日付つきzipに保存します（APIキーは含まれません）</div>
+        <div class="row"><button id="restore-btn" class="ghost">バックアップから復元</button></div>
+        <div class="hint" id="restore-result" style="user-select: text;"></div>
+        <div class="hint">選んだzipの内容で復元します（復元前の状態は自動でバックアップされます。zipに無い既存SOULは残ります）</div>
+      </div>
+
+      <div class="card" id="scheduler-card">
+        <h3>定期処理</h3>
+        <div id="scheduler-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 右パネル -->
+  <div id="side">
+    <h4 id="diary-title">日記</h4>
+    <div class="card"><div id="diary-body" class="empty">まだ書かれてない</div></div>
+    <h4>記憶ファイル</h4>
+    <div class="card" id="side-files"></div>
+  </div>
+</div>
+
+<div id="boot-guard">
+  <p>SOULがまだ無いみたい。設定画面からSOULを作って始めよう。</p>
+  <button id="boot-guard-btn">設定を開く</button>
+</div>
+
+<div id="modal-overlay">
+  <div id="modal-box">
+    <div id="modal-title"></div>
+    <div id="modal-body"></div>
+    <button id="modal-close">閉じる</button>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+/* MDRENDER_START — AI吹き出し用の自前Markdownパーサ。外部ライブラリ・CDN不使用。
+   安全策: まずLLM出力全文をHTMLエスケープし、その後エスケープ済みテキストに対して
+   正規表現でMD記法を検出し、こちらが生成したタグだけで組み立てる。生HTML/<script>タグは
+   常にエスケープ済みテキストとしてしか出力されないため、innerHTMLへ入れても実行されない。
+   DOMに依存しない純関数（Node実行のXSSテストから直接呼べるようにするための設計）。 */
+function fieriaEscapeHtml(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function renderMarkdownToHtml(raw) {
+  var src = String(raw == null ? "" : raw);
+  var codeBlocks = [];
+  var inlineCodes = [];
+  // プレースホルダは呼び出しごとにランダム生成する。固定文字列だと、LLM出力の
+  // 平文に同じ並びが含まれた瞬間（例: FieriA自身のコードを話題にしたとき）に
+  // 表示が壊れる衝突バグになるため（レビュー指摘・実再現済み）。
+  var salt = Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);
+  var CB = "@@CB" + salt + "@@";
+  var IC = "@@IC" + salt + "@@";
+
+  // 1) フェンス付きコードブロック。生テキストの段階で抽出し、中身はMD記法として
+  //    解釈せず、エスケープのみして<pre><code>にそのまま入れる。
+  src = src.replace(/```[a-zA-Z0-9_+-]*\r?\n?([\s\S]*?)```/g, function (_m, body) {
+    var idx = codeBlocks.length;
+    codeBlocks.push(fieriaEscapeHtml(body.replace(/\r?\n$/, "")));
+    return "\n" + CB + idx + CB + "\n";
+  });
+
+  // 2) インラインコード。同じく生テキストの段階で抽出。
+  src = src.replace(/`([^`\n]+)`/g, function (_m, body) {
+    var idx = inlineCodes.length;
+    inlineCodes.push(fieriaEscapeHtml(body));
+    return IC + idx + IC;
+  });
+
+  // 3) 残り全文をエスケープ（プレースホルダはランダムsalt入りトークンのため衝突しない）
+  var text = fieriaEscapeHtml(src);
+
+  // 4) 強調。**太字**を先に消費しないと単独の*斜体*判定が壊れるため順序が重要。
+  text = text.replace(/\*\*([^\n*]+)\*\*/g, "<strong>$1</strong>");
+  text = text.replace(/\*([^\n*]+)\*/g, "<em>$1</em>");
+
+  // 5) リンク。http/https以外のスキームはプレーン表示（タグ化しない）。
+  text = text.replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, function (m, label, href) {
+    if (/^https?:\/\//i.test(href)) {
+      return '<a href="' + href + '" target="_blank" rel="noopener noreferrer">' + label + "</a>";
+    }
+    return m;
+  });
+
+  // 6) 行単位でブロック構造（見出し・箇条書き・段落）を組み立てる
+  var lines = text.split("\n");
+  var out = [];
+  var para = [];
+  function flushPara() {
+    if (para.length) {
+      out.push("<p>" + para.join("<br>") + "</p>");
+      para = [];
+    }
+  }
+  var i = 0;
+  while (i < lines.length) {
+    var line = lines[i];
+    var trimmed = line.trim();
+    if (trimmed === "") { flushPara(); i++; continue; }
+
+    var cb = new RegExp("^" + CB + "(\\d+)" + CB + "$").exec(trimmed);
+    if (cb) {
+      flushPara();
+      out.push('<pre class="md-code"><code>' + codeBlocks[Number(cb[1])] + "</code></pre>");
+      i++; continue;
+    }
+
+    var heading = /^(#{1,3})\s+(.*)$/.exec(trimmed);
+    if (heading) {
+      flushPara();
+      var lvl = heading[1].length;
+      out.push("<h" + lvl + ">" + heading[2] + "</h" + lvl + ">");
+      i++; continue;
+    }
+
+    var bullet = /^[-*]\s+(.*)$/.exec(trimmed);
+    if (bullet) {
+      flushPara();
+      var items = [];
+      while (i < lines.length) {
+        var bm = /^[-*]\s+(.*)$/.exec(lines[i].trim());
+        if (!bm) break;
+        items.push("<li>" + bm[1] + "</li>");
+        i++;
+      }
+      out.push("<ul>" + items.join("") + "</ul>");
+      continue;
+    }
+
+    var numbered = /^\d+\.\s+(.*)$/.exec(trimmed);
+    if (numbered) {
+      flushPara();
+      var oitems = [];
+      while (i < lines.length) {
+        var om = /^\d+\.\s+(.*)$/.exec(lines[i].trim());
+        if (!om) break;
+        oitems.push("<li>" + om[1] + "</li>");
+        i++;
+      }
+      out.push("<ol>" + oitems.join("") + "</ol>");
+      continue;
+    }
+
+    para.push(line);
+    i++;
+  }
+  flushPara();
+
+  var html = out.join("");
+
+  // 7) インラインコードのプレースホルダを最後に復元
+  html = html.replace(new RegExp(IC + "(\\d+)" + IC, "g"), function (_m, idx) {
+    return '<code class="md-inline-code">' + inlineCodes[Number(idx)] + "</code>";
+  });
+
+  return html;
+}
+/* MDRENDER_END */
+(function () {
+  var state = {
+    souls: [], roles: [], active_soul: null, active_role: null, fact_layer: null,
+    settings: null, theme: "light", pet_enabled: true, pet_skins: {},
+  };
+
+  function applyTheme(theme) {
+    document.documentElement.dataset.theme = theme === "dark" ? "dark" : "light";
+  }
+
+  var OP_LABELS = {
+    write_wiki: "wikiに書き込み",
+    save_sacred: "sacredに保存",
+    update_self_notes: "自己ノート更新",
+    update_user_notes: "ユーザーノート更新",
+    update_memory_index: "索引に追加",
+    read_memory: "記憶を読み込み",
+    compact: "会話を要約に圧縮",
+  };
+
+  function $(id) { return document.getElementById(id); }
+
+  // --- トースト通知（設定画面の保存系操作専用。チャット送信等には使わない） ---
+  // 連続呼び出しでは単一の#toast要素を書き換えるだけなので、積み上がらず前のものを置き換える。
+  var toastHideTimer = null;
+  function showToast(message, kind) {
+    var el = $("toast");
+    clearTimeout(toastHideTimer);
+    el.textContent = message;
+    el.className = kind === "error" ? "show error" : "show";
+    toastHideTimer = setTimeout(function () {
+      el.classList.remove("show");
+    }, 2500);
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  // --- boot-guard表示規則 ---
+  // SOULが無く、かつ現在のビューがチャットのときだけ覆う。設定・記憶ビューでは常に隠す。
+  function updateBootGuard() {
+    var activeBtn = document.querySelector(".nav-btn.active");
+    var currentView = activeBtn ? activeBtn.dataset.view : "chat";
+    var shouldShow = !state.active_soul && currentView === "chat";
+    $("boot-guard").classList.toggle("hidden", !shouldShow);
+  }
+
+  // --- ビュー切り替え ---
+  document.querySelectorAll(".nav-btn").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      document.querySelectorAll(".nav-btn").forEach(function (b) { b.classList.remove("active"); });
+      btn.classList.add("active");
+      var name = btn.dataset.view;
+      document.querySelectorAll(".view").forEach(function (v) { v.classList.remove("active"); });
+      $(name + "-view").classList.add("active");
+      if (name === "memory") loadMemoryTree();
+      if (name === "logs") loadLogTree();
+      if (name === "settings") loadSettings();
+      if (name !== "settings") stopOauthPolling();
+      updateBootGuard();
+    });
+  });
+
+  $("boot-guard-btn").addEventListener("click", function () {
+    document.querySelector('.nav-btn[data-view="settings"]').click();
+  });
+
+  // --- 起動 ---
+  function boot() {
+    window.pywebview.api.boot().then(function (data) {
+      applyBoot(data);
+    });
+  }
+
+  function applyBoot(data) {
+    state.souls = data.souls || [];
+    state.roles = data.roles || [];
+    state.active_soul = data.active_soul;
+    state.active_role = data.active_role;
+    state.fact_layer = data.fact_layer;
+    state.theme = data.theme || "light";
+    applyTheme(state.theme);
+    state.pet_enabled = data.pet_enabled !== false;
+    state.pet_character = data.pet_character || "konoha";
+    updatePetVisibility();
+    loadPetSkins();
+    applyPetSizeVar(data.pet_size || 64);
+    var savedPos = data.pet_pos || {};
+    setPetPos(savedPos.right != null ? savedPos.right : 20,
+      savedPos.bottom != null ? savedPos.bottom : 92);
+
+    var soulObj = state.souls.find(function (s) { return s.id === state.active_soul; });
+    $("soul-name-label").textContent = soulObj ? soulObj.name : "SOUL未選択";
+
+    updateBootGuard();
+
+    // 今日の会話ログを画面へ復元（表示専用。engine.messagesには入らないのでLLMコンテキストは増えない）。
+    // boot/switch_soul/create_soulのいずれもapplyBootを通るため、ここ一箇所でSOULごとの
+    // チャット欄が正しく入れ替わる（operations折りたたみは付けない。過去ログはツール実行結果を持たない）。
+    if (data.today_log) {
+      $("chat-log").innerHTML = "";
+      data.today_log.forEach(function (entry) {
+        if (entry.who === "break") {
+          addBreakDivider($("chat-log"), "── 区切り ──（これまでの会話はログにある）");
+        } else {
+          addBubble(entry.who, entry.text);
+        }
+      });
+      scrollChatToBottom();
+    }
+
+    renderRoleBar();
+    renderDiary();
+    renderSideFiles();
+  }
+
+  // --- ペット（ドット絵マスコット） ---
+  // 「中で育ってる個体の身体」の位置づけ。既定キャラはbox-shadowピクセルグリッド方式
+  // （1x1の透明divにピクセル分だけbox-shadowを積む、外部画像不使用の定番テクニック）。
+  // 状態の見た目・動きはCSS側（#pet-widget.pet-*）が担い、ここではクラスの
+  // 付け替えとタイマー管理だけを行う（アニメ本体をJSで書かない、という設計方針）。
+  var PET_PIXEL = 4; // 1グリッドあたりのpx。48x40の器に対応する値をCSS側とも揃える
+  // 12(横)x10(縦)グリッドで丸っこい小動物のシルエットを表現する。y0の耳ぽっちを除き
+  // ほぼ対称の丸みを帯びた輪郭。頬（cheek）だけ別カラーで上書きする。
+  var PET_ROWS = [
+    { y: 0, ranges: [[2, 3], [8, 9]], color: "ear" },
+    { y: 1, ranges: [[3, 8]], color: "body" },
+    { y: 2, ranges: [[1, 10]], color: "body" },
+    { y: 3, ranges: [[0, 11]], color: "body" },
+    { y: 4, ranges: [[0, 11]], color: "body" },
+    { y: 5, ranges: [[0, 11]], color: "body" },
+    { y: 6, ranges: [[0, 11]], color: "body" },
+    { y: 7, ranges: [[0, 11]], color: "body" },
+    { y: 8, ranges: [[1, 10]], color: "body" },
+    { y: 9, ranges: [[3, 8]], color: "body" },
+  ];
+  var PET_CHEEK_COORDS = { 6: [2, 9] }; // row6のx=2,9だけ頬色に差し替える
+  var PET_COLOR_VAR = { body: "var(--pet-body)", ear: "var(--pet-ear)", cheek: "var(--pet-cheek)" };
+
+  function buildPetBodyShadow() {
+    var shadows = [];
+    PET_ROWS.forEach(function (row) {
+      var cheeksInRow = PET_CHEEK_COORDS[row.y] || [];
+      row.ranges.forEach(function (range) {
+        for (var x = range[0]; x <= range[1]; x++) {
+          var color = cheeksInRow.indexOf(x) !== -1 ? "cheek" : row.color;
+          shadows.push((x * PET_PIXEL) + "px " + (row.y * PET_PIXEL) + "px 0 0 " + PET_COLOR_VAR[color]);
+        }
+      });
+    });
+    return shadows.join(", ");
+  }
+
+  function initPetBody() {
+    var body = document.querySelector("#pet-widget .pet-body");
+    if (body) body.style.boxShadow = buildPetBodyShadow();
+  }
+
+  // 書き込み系オペレーション（OP_LABELSのうちread_memory以外）。ターン結果の
+  // operationsにこれらが含まれていたら2秒だけ「カキカキ」状態にする。
+  var PET_WRITE_OPS = { write_wiki: 1, save_sacred: 1, update_self_notes: 1,
+    update_user_notes: 1, update_memory_index: 1, compact: 1 };
+
+  var petAutoTimer = null;
+  function setPetState(name) {
+    var el = $("pet-widget");
+    if (!el) return;
+    clearTimeout(petAutoTimer);
+    ["pet-idle", "pet-thinking", "pet-writing", "pet-recall", "pet-error", "pet-love"].forEach(function (c) {
+      el.classList.remove(c);
+    });
+    // 連打なでなで対応: 同じ状態を続けて指定してもCSSアニメが再始動するよう、
+    // クラスを外した直後にリフローを挟んでから付け直す
+    void el.offsetWidth;
+    el.classList.add("pet-" + name);
+    applyPetSkinForState(name);
+    if (name === "writing") {
+      petAutoTimer = setTimeout(function () { setPetState("idle"); }, 2000);
+    } else if (name === "error") {
+      petAutoTimer = setTimeout(function () { setPetState("idle"); }, 3000);
+    } else if (name === "recall") {
+      // ぴょんと跳ねるアニメ自体は0.9秒で終わるが、そのまま少し余韻を置いてidleへ戻す
+      petAutoTimer = setTimeout(function () { setPetState("idle"); }, 1200);
+    } else if (name === "love") {
+      petAutoTimer = setTimeout(function () { setPetState("idle"); }, 1600);
+    }
+  }
+
+  function petStateAfterTurn(result) {
+    // 停止時は演出せずidleに戻すだけ（応答自体が破棄されているため）
+    if (!result || result.stopped) return "idle";
+    var ops = result.operations || [];
+    var hasWriteOp = ops.some(function (op) { return PET_WRITE_OPS[op.op]; });
+    if (hasWriteOp) return "writing";
+    if (result.recall_used) return "recall";
+    return "idle";
+  }
+
+  // --- ペットのSOULごとの見た目差し替え（skin） ---
+  // souls/<id>/pet/配下に状態名.pngが置かれていれば、CSS既定キャラの代わりに
+  // その画像を表示する（無い状態はidle.pngにフォールバック、pet/自体無ければ
+  // 既定CSSキャラのまま）。SOUL切替のたびにapplyBootからloadPetSkinsを呼び直す。
+  // 組み込みデフォルトスキン「コノハ」(48x48ドット絵・生成元: 開発リポジトリ外のスクリプト)。
+  // souls/<id>/pet/*.png が置かれていればそちらが優先される（applyPetSkinForState参照）。
+  // 組み込みデフォルトスキン2キャラ。設定 pet_character で切替（既定: konoha）。
+  // souls/<id>/pet/*.png があればどちらよりも優先される（applyPetSkinForState参照）。
+  var BUILTIN_PET_SKINS = {
+    konoha: {
+      idle: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAC3klEQVR4nO2YP0hbQRjAL+KQ0kqlf6LY4lBCm0GoBEpBMHMIIkUKQhednezSIZOU0sFBO2WOHUoLEiRIyF4oBSXY4tBKcJBQ2hTkSVO87ZXvyMnl3nu+u+8u2uF+y+Vdvu+778+9+y4hxOFwOBwOx+WRwCgNX7/h88/eyfGl2QAGCJL9jyWsqlUbqMy1vr73O+1dNpZWnvkYG6DX6doQq3FhFfB+NnscUtUDWZ55T7DR9wBg4c9bL/36xjJpHR6Q4dE0qVaqqEVBH6hWqswO2ATbmErg34FPNTZmJzMofa6337WDBR2ACGRQJXsgA7I2GcAqTkwV2NjY+0byC2+UjkKQAVmuJ9rBMqgjzBeVP4sZlgMJmxN135bWiAlaDQScef083zNXXK+jFg6z4yEaWsLE+aWVdwmYn3qcI+3fvwI6qdsjgXmYa3zZIZSeBgLBBKG1hcSFgNGRO/7dsfFQ54GweZgDHaD144jZkhOjc83QqoD4HJV1XZqH33uewWHe7Caml2ID0D6Fkskr1pwH0vceMHtgV9yq0OAgiLjjWasCsEj24SNy0AyeQKbcT2fO3g1wHLr07Nws++68SlhpZLag9JQ1RX5FgSrAteO8RhkbACj2O/uAaFfnmhEbgFi6MOdf5dqksZpkowqq8tnJTE/Di6qC8RaaX10jQ7llUpgZN5a/dTPFriU6V43Yl5hHDVvo2tWhwPeQTU72BY0NIE6+8/cPexfk3hDV7LS20EVSDLmihHVqVCcWqW0fCU8pa/LeyXGiuF4PXF+sbKFyIb8F42Kt/oQYUpZs8S3Eg+A+8EDkKihtD36Mhr0DUTydmSOb25WzUZVONwDRSfn00Q6AG+HtXpXF+QVS/rChpUMl5+NQrgCMugFgoNL2sf6Dpp9BUM3soxoZz5BtKNIu+oy3VQ2KyLqIUZMy+UvQVqMcNHVArALPZtS/E7KsDYyvCTq/X239pe5wOBzkv+EfaUuhIaiOrugAAAAASUVORK5CYII=",
+      love: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAACw0lEQVR4nO2YPWgUQRTH54LFiRGDH0mIEkQOTRFQDiQQ0PoIEiQIgk1Sp9JGxCpYWFio1dWXFKJNCFeE6wUJKIdKCo1HkHAEjSArntx0K//hRmbndrMzb2dNivk1czs37837mJk3u4x5PB6Px+M5OAoUoaETJ0P5O/j188B0gAFGZPN1lSrqVAcpcu2PL8PO3jvRVpfuhBQdkOv0dKjZ+G8ZCL61IgaZymGsjHyg6MjdAUy8sfYobCzfZe3tLTY0WmL11TppUsiD+mpd6IFO6KZkgr4H3qyLtnxlgiQv5TZ7eqiQHVBBBE2ihzEY65IBquDk9Ixom+8/scr8c6OjEGMwVsqpeqgcsRksJ9V/qxHWHYnrU2VXqk9ZFqwKCIx5fK8S6Xv4rEGaOE5PQChohSzGLy69KKB/euo62/vxvU9m+MxIXz/6mh/eMs67fY5QnLBaQupEYHTkbHhubDzWeBDXjz7IgPbujtClB8bmmmGVAfU5Keq2tLY/R55hsCx2k9cWUx2wPoWKxaPOjAelC5eEPuhVlyoKHJxIO56tMoBJypevsq1W/wmUlYuliX97A4ajSs/OzYr/9suEk0LmCs67oijKKwqygGvHfoUy1QEI5h19oOq1uWakOqCmLi/j44ATasFLykLmJfRl4wFrPimKNuv406eGxbXE5qqRuoml11hCg8eOR/6DIeX7PPFZx2R8589vsRf02pBU7IxOIbkHdAfyoNNzwPS6cahOIRUYanLPIi2h2kxlDe3CeuMmy0hN06VmQEZbvYfpWbA6hWy4dWMu0toSaPPC8LiMWFdiUxZuz7Px3a9sZ+w8q71aNpbjvGsVNONNjNbGASpcWz7OX2jydIJbRp90CskIuYYT9ZK/SbrKBidEXYUsCLJ8EpQEGYwnv1KqqFmQ0Uz6OqGPdUEm723fX119Uvd4PB52aPgLE0+aAaPYuEUAAAAASUVORK5CYII=",
+      thinking: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAC20lEQVR4nO2YTWgTQRTHJ8XDFhWLH1VEPEjQHgpKQISCHiUEKbUIgpf23JNePHgqHjx4qJ6Cx7QHUZAQgoTgVRBBCSo9aA09SBCNXytGOreVN2SWl/3IzLyd2B7mB2E2s/Pevv97uzOzy5jD4XA4HI7tI0cxmti3P5DH/u+f2+YDGGNE1p+XqaZWfZAy13n3KOh1X4u2vHwtoPgAu17fB67Gf6uA/6U9EJCuHYyVmfeRj5ELgAu/rN0OmqvXWWdzg00cybN6tU66KNgD9Wpd+AGf4JtSCfoz8KIh2sKZKZK9tFvv+6FCFoCBDOpkD8bAWJuMUQ2nZ0qibb15z4oL97WmQhgDY6Ud9kNll8lgedHoMc5wVEhSH7ZdK6+wLBgtIBDMnRvFgb5b95qkCyf58RVVLF2cCxrPajmSgKTgl5Yf5qB/5twF1v32NWYzeehwrB/6Wm9fMc63YkKSRCQFjftJAmTWPW+cHTt6nFHpfP4khGC/IMBkm2EkAP9Py7op7c0PA/+lAFjsps8vKQUYz0KQdVvBA/kTp4Q/8IsrDQsciFBNz0YVgIsUTp9lG+34DJSVk/mp8NmAwGGVnp2fFeeGVcLKQmYLzrfEoii3KFAF2HYMWyiVAsBw1NkHsF+TbYZSAC7dqIJPAkTgBS+tCplvoe8/uuEv6/iDBybFtsRkq6F1Cw07/+AyY78+rohWB9V4zxsPRcitBoiBn5idIvFozULyGdize2/sXOuuFx4XbnKlL9X43t8/iat02kq9o2YhDASqs89SVkCWDFegUirWoF1sNOdYRioRX7gCMtvRbQyuQuZbKI0rl+bZk6fVsNWl1xeAg4ze98YCpBO53OuyeHWBVR6vGtnwSPAqtCsArakACjxy+1h/oRmlCG6YfdIsJDNkG070S/4maasanJB1DNkQyPJJUOJnCN74q0QSuAoym2lfJ6JjbZBJPWDy/mrrk7rD4XCwHcM/g82wu2PSfY4AAAAASUVORK5CYII=",
+      writing: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAC5klEQVR4nO2YPWgUQRTH54LFiYrBjyRosJBDUwSUBRECWh9BgoRUNqZOpRYiVsHCwkKtrr6kEAU5wiHhWhEkoBwqKZJ4pAiHaATZ4Mltt/Kf7Jxzs7vZnbezicX84NjduXlv5r03M29mGLNYLBaLxXJwFChCg8dP+OLd3fl1YDrAACOy+q5CFTWqg+S59peXfmf7I39W5m/5FB2Q6wQ65GjsWwTc762+DqWVQ13heVfSkbsBaHhl6ZHfWLjD2psbbHCkxOq1OqlRyIN6rc71QCd0UyJBnwPvl/nTuTxGkhdyq4EeKmQDZODBNN5DHdQ1yQBVcHxikj+bn9ZY+fbzVEsh6qCukJP1UDmkU1k0qr7LHlYNiSqTZRcrT1kWtBIIOvP4brmv7OGzBqnhKD0uIaEVsnR+bv5FAeUTV6+z7Z8/QjJDp4dD5Shrfv7APK8bMoRihNYQkhsCI8Nn/dEz5yI7D6LKUQYZ0P62xXWpjtHZZmhFQP6O87ourc31vm90WCS78WtziQZor0LF4mFjnQel8xe5PuiVhyoSHIxIWp61IoBGnEtX2EYrvAJl5UJprDc30HFk6anpKf7fXpEwkshM4XldnhTFFgVRwLZjr0SZaAAE8/Y+kPXqbDMSDZBDl1fno4ARcsKLi0LmIfR15QFrPinyZ9b6p04O8W2JzlYjcRILqzGEjh451vcfOuLc92K/VdLU7/z5zeeCmhvikl2qVUjMAdWAPOgEBoA4I8QugJyJ9wN318u+WEpl5INUqlVILatOlpfwM9HRaoyutKezxAiI1C6XzS43bibJzdyYZq/f1HrPOGZjdIkIqB5XI5JqCHEjmP559Z7jsK1gXKfF87qhrBs1jLQMoBy2q68Wgre3uqJMPQQZiQBXzHZXo7zwIryfFAHtRCaWONN4RL1ay2jPOzv/ckNeXhck3T2RL1VBlitBExe7RhKZHAXhzbjbCbWuCTJZr3t+NXWlbrFYLOy/4S+wTqPE6vJF9QAAAABJRU5ErkJggg==",
+      recall: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAADD0lEQVR4nO1YTWgTQRSeXXKI1GLxJy0qOUjQHAqWBRUK5hxCKVIEwYuec6oePORURDz00HrKuXoQDxJKKCF3QUQlqOSgJfQQgmiEssWUzm3lDZkwOzub3ZmdpI3sd5ns7Htvvvfe7Lw3QShGjBgxxgGnXXZE8yaaEPKHyZu+TkwEnEkm/1/DUFGaOXN2kE77YP/YbET6iJvvyqqqWm0oRa7z7Y3T634mY3ntvqNiA/R6fRtsNsaWAftXy0UorB7I0sjbjI2ROwALf9h+6tRfrqLO3i6amcugaqWqtCjoA6qVKrEDNsG2SiZM1XO3+b5GRmshK7umS6/Zt6MKU0flgwiGiR7IgKxOmKJJI100pvBHMvopzi8WyNj48h3lH7wIdRSCDMhSPdaOKhJ+L0Tk6aL8bzbCvCOiOVb3VXlDifiAp4wwkHn+KO+aK23WlRYW2bEVCpoRhXxx7bUB84u3cqj757dHJ3Vh1jMPc42vnxDGRx5HVJzw3ULDQKM+N3vJuXwxLSQPEM3DHOgAOj/bxBYfGJk2QyoD7LNf1GXR2vvhegbCtNjN3y4GOiBdiZPJU9rIAzJXrhF7YJfdqlDgwImg41kqA7CIdf0G2m15T6CouJrJDr4NIA5VenllmbwblokTdaXE+IgURdqiQBag7RhWKAMdAMVRRx/A2pVpMwIdYFMnIv8s10WN9SQZwyCsvLWQdRU8vyxE3kL31jfQdG4VFZbSkeXPn0uRtkSm1Qj8iKnXsIVOT0173kM0KawnONCBIPne4V/yLfC1wa/YSW2hcaIkaFFElVqpErOo7bSZp5Q2eftg3yht1j3ti5YttFXIb8P4sFa/gyJii7NFtxB1gnKgjvBZ8DgAlxi+labHqOgb8MPdpRX0dqcyGMOi13eAJcmfPuy7hN9NjHWC9CdI/r762LJQu08qLDBHnifMI3QGYKT9yiiBue2j/UIzSiewIPpBMFUjpBtY0a7yGa8rG1gh6iwiFakofwnqKpSJqATYLNBo+v07wcvqQOQ2Qeb+qusv9RgxYsRAJwb/AGsi1uamwWXEAAAAAElFTkSuQmCC",
+      error: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAC1ElEQVR4nO2YT2gTQRTGX4uHiIrFP1VEPEjUHgpKoSgFPYciRYogeGnPPelNeyoeRDyop5xTD6IgoQQpuXgqSEAJKj1oDYWWIFpFVkzp3la+Ja/MbjbdmbcT62F+l0k2772Z773deZMlcjgcDofDsXv0SZwGDh4K+LP3+9euxQD9JGR5qSh1tRpDlLnmx+dBa+NdOBbnbgaSGPBrtWOo1fhnFfC+NSIL0vWDLWfeU2L0XAAmri3cC6rzt6i5ukIDx/NUKVdEk8IfVMqVMA5iIrakEvJn4M1iOI5cGBL5s99yO44UsQAVZFAne7CBrU36pY7DY+PhWH//iQpTT7S2QtjAlv3UOFL2mBjzpPHPaobjQpKuqb5Pi48oC0YNBIu5f7sQuTb7uCqaOCmOJ2ho2g7FpbWAXt+NXJuZe9YHUWMXr9DGj+8dPoNHj3Vcx7X6h7fk+1sdQiQitIxr65tBfe0nsQDOei63l06eOEVSml/XQyEsggWYHDO01cZ3mW5ZN6Wx+jnynQWg2Q1fnkkVYLwLIeu2Fg/yp8+F8RBXfc7Q4CAibXs2qgAmGTk/SiuNzh0oK2fzQ9vPBhaOLj0xORH+tlMlrDQyW/j+VtgU+YiCKuDYsVOjTBUAx15nH6hxTY4ZqQLU0vVq8UlAhNrwulUh8y1Uf5iLjFnsjxweDI8lJkeN1IeYVeMW2r/vQKLNl9odOnPpgZaANPvW5p9Ib4gTb3ZGt1ASyCQWY1IBHfvZhCNKUqfW2kb5Ie5WAZu02hXghpZ21BDdQqXxwgLG6cXqtawLLsVisQDAi1WFxEX0rALXr07Sy1fl7VFSAVLmV22MBXAQbve6TN+YotKLeSMfP7b4NLQrgNFUgAQ/dvtY/0PTSxG+YfZFjYwzZBtfGFf8TtJWNXxB1lXEjiDLK0HGy7B447cSSahVUBtQ0tuJuK0NMqkHJv9fbb1SdzgcDvpv+Au0CqmOHNpdNgAAAABJRU5ErkJggg==",
+    },
+    mokora: {
+      idle: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAACuklEQVR4nGNgGAWjYBSMglEwCoYwYKSFoTEBTv+xiS/ZsI/q9rEw0AgsWLkBhZ8QHsAwJEBMgNP/Pz8/YcW4YoYSwMRARQByIHrI0xqw4HIINdIvLNnMXLCYKPUxZNiLMw8ghyS56be+voyhsbGLJD0LqGAvRekYm158emIozDME88D9a8fg7A+vH4JDCJ/hoChnYedjJBR6MIcvWLkBww5SAE4P/Pz+GYylFHXBFoDYnDxCYAtAbFC6xuYJYkINpAak/yfUDmT70Nl0qQfQHQ3jI8cCLYpQvB74/uUdmH7/+imDoKg0nA+TK8jJBycXkMMmTJnIICAqz0AsAMViekIsA0gfun3obEIAZxEFcxg2AHI8qY7GBhLCAxjw2UFM0U1SRQYyFARAGY9SxyObUwA1lxyANw9gM5gaDifWLmIAUbUrLDmBSiFag+9I+YsY9QSTEK1KD2rZy0SMInqFPgiA7MGVscnyACgqQVFKStFGzyTESEw04ouBUDt9BgMFAYYLDz4wrD50kaCFxKj/DvUECBDyCMWZmItfiqHaXxXMrl50kKBZhNR/R3I8NoDuIRZKSyCYY4gFhNRzQvMAyBOT+kpQ5PKKeshrC8FqXmyeACUFUgAh9d+RYgCbg0lOQsTUAaB0TUz6J1b9d6gnqgpQm+RtEzaQnoQgGvJRPPFz3c6TIJo9yN0cRJPieHT1P9HMgjkePfngAkTlARj72f3LEIahFNgyBhgfC9i9cg2Da3gInMYJDFHNArV8YcnHx0kNrszNx488DyCiDBILoOY1MYAox6MBkONh6Z9qMUBJc4IUx2MDu7ZsojwGKIkFUoAgNPRhnSR8jia7SwkyfMkGXXjJBPLIy2cPyHa0uJQCisNxhT7V+8SwkokcvbjNQwVb9t1ioBsgdnRioJrmo2AUjIJRMAqGLwAAmy7nojvKzc8AAAAASUVORK5CYII=",
+      thinking: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAACsklEQVR4nGNgGAWjYBSMglEwCoYwYKSFoTEBTv+xiS/ZsI/q9rEw0AgsWLkBhZ8QHsAwJEBMgNP/Pz8/YcW4YoYSwMRARQByIHrI0xqw4HIINdIvLNnMXLCYKPUxBOw9snXGfxvvDEaSkwGxUY+u7/b5HWC9Xz88BWNC5sRgsRfkaGxqcYljNYgUz2DTi09PDIV5hmAeuH/tGJz94fVDcOmCz3BQlLOw8zESKnVgDl+wcgOGHaQAnB74+f0zGEsp6oItALE5eYTAFoDYoHSNzRPEhBpIDUj/T6gdyPahs+lSD6A7GsZHjgVaFKF4PfD9yzsw/f71UwZBUWk4HyZXkJMPTi4gh02YMpFBQFSegVgAisX0hFgGkD50+9DZhADOIgnmMGwA5HhSHY0NJIQHMOCzg5iim6SKDGQoCIAyHqWORzanAGouOQBvHsBmMDUcTqxdxACialdYcgKVQrQG35HyFzHqCSYhWpUe1LKXiRhF9Ap9EADZgytjk+UBUFSCopSUoo2eSYiRmGikZwwgewIECHmE4kwMqpBggJhmMyH135Ecjw2ge4iF0hJo8fq9DNX+qgQdTqx6TmgeAHliUl8JilxeUQ95bSFYzYvNEyDHXHjwgcFAQYAoDxBS/x0pBrA5mOQkRM86AN0TVQWoTfK2CRtIT0IQDfkonvi5budJEM0e5G7OQCH4iWYWzPHoyQcXICoPwNjP7l+GMAylIA6H8bGA3SvXMLiGh8BpnMAQ1SxQyxeWfHyc1ODK3Hz8yPMAIsogsQBqXhMDiHI8GgA5Hpb+qRYDlDQnSHE8NrBryybKY4CSWCAFCEJDH9ZJwudosruUIMOXbNCFl0wgj7x89oBsR4tLKaA4HFfoU71PDCuZyNGL2zxUsGXfLQa6AWJHJwaqaT4KRsEoGAWjYPgCAFUFFJHTc0GkAAAAAElFTkSuQmCC",
+      writing: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAC6UlEQVR4nGNgGAWjYBSMglEwCoYwYKSFoTEBTv+xiS/ZsI/q9rEw0AgsWLkBhZ8QHsAwJEBMgNP/Pz8/YcW4YoYSwMRARQByIHrI0xqw4HIINdIvLNnMXLCYKPUxZNiLMw8ghyS56be+voyhsbGLJD0LqGAvRekYm158emIozDME88D9a8fg7A+vH4JDCJ/hoChnYedjJBR6MIcvWLkBww5SAE4P/Pz+GYylFHXBFoDYnDxCYAtAbFC6xuYJYkINpAak/yfUDmT70Nl0qQfQHQ3jI8cCLYpQvB74/uUdmH7/+imDoKg0nA+TK8jJBycXkMMmTJnIICAqz0AsAMViekIsA0gfun3obEIAZxEFcxg2AHI8qY7GBhLCAxjw2UFM0U1SRQYyFARAGY9SxyObUwA1lxyANw9gM5gaDifWLmIAUbUrLDmBSiFag+9I+YsY9QSTEK1KD2rZy0SMInqFPgiA7MGVscnyACgqQVFKStFGzyTESEw00jMGkD0BAoQ8QnEmDrXTZzBQEGC48OADw+pDFwmaRUj9dyTHYwMkN+tBjn/z5PL/rx+eYmAvPRG8fHLVv3lyGdxYfHdvGwrGlrEJ+obeyeg7iTHAMlhLoYKcfIaqAtQmedsEzO4qQQ9AfJyPkgd+rtt5EkSzB7mbU+rgn2hmwWJgUl8JUfoJegA53T27fxnCMJSCOBzGxwJ2r1zD4BoeAqdxAkNUs0AtXxDIK+ph8HFSgytz8/EjzwOINAeJBVDzmljwd/MpBlKAoKg0PP1TLQbIbU7AQt2VwYyBXLBryyaCMUBSmQqrD0iJBVJDfwm0kwSKAWQPoIOIvBmMJHcpQYYv2aCL4pGXzx6Q7WhxKQUUhyPLwRyPLeSRPUZWnxhWMpGjF7d5qGDLvlsomZimgNjRCVLz0opJGeAaGETDMIxP1VEJbCFIrBgxAFcGpunwOjXBLjyl0ZDwgBueGKDq8PpAABaGQQ524akLRsEoYKAcAACzU2FgkErUdgAAAABJRU5ErkJggg==",
+      recall: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAC+ElEQVR4nGNgGAWjYBSMglEwUsD/axX/GYay4/9/vfQf3ROMtLAsJsAJa0gt2bCPIvv+X6v4z6jVQRM3Y3jgz89PKBiXpwYdwOZ4WnqCiZqGgRy4YOUGBnoCFlxpLbbqFMXpNyE8AEzPXLCYKPUxWGKIkL0YHgDncvkohsVtDAx/latQHEIqqK8vY2hs7CJJzwKkGCTXXrAnyE3HpGbgGArzDNY8gJx87l87Bmd/eP0QHEL4DAdFOQs7HyOh0IM5fMHKDRh2UCUT//z+GYylFHXBFoDYnDxCYAtAbFC6xuYJYkINpAak/yfUDmT70NlkZWJSAbqjYXzkWKBVPcCCS+L7l3dg+v3rpwyCotJwPkyuICcfnFxADpswZSKDgKg80ZaCYjE9IZYBpA/dPnQ2IYCziII5DBsAOZ5UR2MDCeEBDPjsIKboJqkiAxkKAqCMR6njkc0pgJpLDsCbB7AZTA2HE2sXMYCo2hWWnEClEK3Bd6T8RYx6gklooFqRMUTaS1QeoFfogwDIHlwZmywPgKISFKWkFG30TEKMxEQjvhgItdNnMFAQYLjw4APD6kMXCVpIjPrvUE+AACGPUJyJufilGKr9VcHs6kUHCZpFSP13JMdjA+geYqG0BII5hlhASD0nNA+APDGprwRFLq+oh7y2EKzmxeYJUFIgBRBS/x0pBrA5mGAmxjb2gi8GYOmYmPRPjHpOpFKoqiAABWMDLNh6Y/+vMcCHLyBpLh8lGf1ct/MkiGYPcjcnxfHonsBmFiwG0JMPLoDiAZCjkR2PXqE8u38ZwjCUAlvGAONjAbtXrmFwDQ+B0ziBIapZoJYvLPn4OKnBlbn5+BH2AMwT2HM9JBZAzWtiwd/NqAMDhICgqDQ8/ZMVA9RsTsBC3ZXBjIFcsGvLJtJjABugJBZIDf0l0E4SPkeT3aUEGb5kgy68bgB55OWzB2Q7WlxKAcXhuEKf6n1iWMlEjl7c5qGCLftuMdANEDs6MWQGeEfBKBgFo2AUMAwVAADrTyF+Ml8xLwAAAABJRU5ErkJggg==",
+      error: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAACjklEQVR4nGNgGAWjYBSMglEwCoYwYKSFoTEBTv+xiS/ZsI/q9rEw0AgsWLkBhZ8QHsAwJEBMgNP/Pz8/YcW4YoYSwMRARQByIHrI0xqw4HIINdIvLNnMXLCYKPUxZNiLMw8ghyS56be+voyhsbGLJD0LqGAvRekYm158emIozDME88D9a8fg7A+vH4JDCJ/hoChnYedjJBR6MIcvWLkBww5SAE4P/Pz+GYylFHXBFoDYnDxCYAtAbFC6xuYJYkINpAak/yfUDmT70NlUqQd2f9FkiCfgIGx85FigRRGK1wPfv7wD03f+KTEwMLyB82FyBTn54OQCctiEKRMZBETlGYgFoFhMT4hlAOlDtw+dTQjgLKJgDsMGQI4n1dHYQEJ4AAM+O4gpukmqyECGggAo41HqeGRzCqDmkgPw5gFsBlPD4cTaRQwgqnaFJSdQKURr8B0pfxGjnmASolXpQS17mYhRRK/QBwGQPbgyNlkeAEUlKEpJKdromYQYiYlGesYAsidAgJBHKM7EoXb6DKsPXYTThAAh9d+RHI8NoHuIkRolUGucPUP1ooMEHU+s+u9QT0zqK0ERzyvqIc8DIHpYxwC1wXeoJ6oKUJvkbRM2YHiAYGsUoiEfxRM/1+08CaLZg9zNKXXsTzSzcCUfXICFlArl2f3LEIahFMThMD4WsHvlGgbX8BA4jRMYopolKCoNT+8+TmpwZW4+fuR5ABFlkFh4//opAzGAKMejAZDjYemfajFASXOCFMdjA7u2bKI8BiiJBVKAIDT0YZ0kfI4me2gRZPiSDbrwkgnkkZfPHpDtaHEpBRSH4wp9qo+NwkomcvTiNg8VbNl3i4FugNjRiYFqmo+CUTAKRsEoGL4AAOz86HpnrQrgAAAAAElFTkSuQmCC",
+      love: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAACqUlEQVR4nGNgGAWjYBSMglEwCoYwYKSFoTEBTv+xiS/ZsI/q9rEw0AgsWLkBhZ8QHsAwJEBMgNP/Pz8/YcW4YoYSwMRARQByIHrI0xqw4HIINdIvLNnMXLCYKPUxZNiLMw8ghyS56be+voyhsbGLJD0LqGAvRekYm158emIozDME88D9a8fg7A+vH4JDCJ/hoChnYedjJBR6MIcvWLkBww5SAE4P/Pz+GYylFHXBFoDYnDxCYAtAbFC6xuYJYkINpAak/yfUDmT70Nl0qQfQHQ3jI8cCLYpQvB74/uUdmH7/+imDoKg0nA+TK8jJBycXkMMmTJnIICAqz0AsAMViekIsA0gfun3obEIAZxEFcxg2AHI8qY7GBhLCAxjw2UFM0U1SRQYyFARAGY9SxyObUwA1lxyANw9gM5gaDifWLmIAUbUrLDmBSiFag+9I+YsY9QSTEK1KD2rZy0SMInqFPgiA7MGVscnyACgqQVFKStFGzyTESEw00jMGkD0BAoQ8QnEmDrXTZzBQEGC48OADw+pDFwmaRUj9dyTHYwMkN+tBjn/z5PL/rx+eYmAvPRG8fHLVv3lyGdxYfHdvGwrGlrEJ+obeyeg7iTHAMlhLoYKcfIaqAtQmedsEzO4qQQ9AfJyPkgd+rtt5EkSzB7mbU+rgn2hmwWJgUl8JUfoJegA53T27fxlMC6PxsYHdK9cwuIaHwGlcQBjNLFDLFwTyinoYfJzU4OrcfPzI8wAizUFiAdS8fmsoRVTI/918iqCat0hmgRwPS/9UiwFymxOwUHdlMGMgF+zasonyGMAVC9QGgtDQh3WS8Dma7C4lyPAlG3ThFRvIIy+fPSDb0eJSCigOxxX6VO8Tw0omcvTiNg8VbNl3i4FugNjRiYFqmo+CUTAKRsEoGL4AAEBoPYp5Or9nAAAAAElFTkSuQmCC",
+    },
+  };
+  function builtinPetSkins() {
+    return BUILTIN_PET_SKINS[state.pet_character] || BUILTIN_PET_SKINS.konoha;
+  }
+
+  function loadPetSkins() {
+    if (!state.active_soul) {
+      state.pet_skins = {};
+      applyPetSkinForState(currentPetStateName());
+      return;
+    }
+    window.pywebview.api.get_pet_skin().then(function (skins) {
+      state.pet_skins = skins || {};
+      applyPetSkinForState(currentPetStateName());
+    }).catch(function () {
+      state.pet_skins = {};
+      applyPetSkinForState(currentPetStateName());
+    });
+  }
+
+  function currentPetStateName() {
+    var el = $("pet-widget");
+    if (!el) return "idle";
+    for (var i = 0; i < el.classList.length; i++) {
+      var c = el.classList[i];
+      if (c.indexOf("pet-") === 0 && c !== "pet-hidden" && c !== "pet-has-skin") {
+        return c.slice(4);
+      }
+    }
+    return "idle";
+  }
+
+  function applyPetSkinForState(name) {
+    var el = $("pet-widget");
+    if (!el) return;
+    // 優先順: SOUL固有スキン（状態→idle） > 組み込みコノハ（状態→idle）。
+    // コノハが常に居るのでCSSフォールバックキャラは実質data URI破損時のみ。
+    var src = state.pet_skins[name] || state.pet_skins.idle ||
+      builtinPetSkins()[name] || builtinPetSkins().idle;
+    if (src) {
+      el.querySelector(".pet-skin-img").src = src;
+      el.classList.add("pet-has-skin");
+    } else {
+      el.classList.remove("pet-has-skin");
+    }
+  }
+
+  function updatePetVisibility() {
+    var el = $("pet-widget");
+    if (el) el.classList.toggle("pet-hidden", !state.pet_enabled);
+    var hz = $("pet-hover-zone");
+    if (hz) hz.classList.toggle("pet-hidden", !state.pet_enabled);
+  }
+
+  // --- ペットのサイズ・位置（チャットペイン右下からのオフセット） ---
+  // #pet-widget（本体、pointer-events:none）と#pet-hover-zone/#pet-handle（ドラッグ用、
+  // #pet-widgetの兄弟要素）は同じ矩形を共有する必要があるが、CSS変数は祖先→子孫にしか
+  // 継承されないため、#pet-widget自身ではなく両者の共通の親である#chat-view側に
+  // --pet-size/--pet-right/--pet-bottomを持たせる（CSS側の同名コメントも参照）。
+  var petPos = { right: 20, bottom: 92 }; // サーバ既定と同じ。applyBoot()で実値に差し替わる
+  var petDrag = null; // ドラッグ中のみ {pointerId, startX, startY, startRight, startBottom}
+
+  function petPane() { return $("chat-view"); }
+
+  function applyPetSizeVar(size) {
+    var pane = petPane();
+    if (pane) pane.style.setProperty("--pet-size", size + "px");
+  }
+
+  function applyPetPosVars(right, bottom) {
+    var pane = petPane();
+    if (!pane) return;
+    pane.style.setProperty("--pet-right", right + "px");
+    pane.style.setProperty("--pet-bottom", bottom + "px");
+  }
+
+  function currentPetSizePx() {
+    var pane = petPane();
+    var raw = pane ? getComputedStyle(pane).getPropertyValue("--pet-size") : "";
+    var n = parseFloat(raw);
+    return isNaN(n) ? 64 : n;
+  }
+
+  // ペインの矩形内に収まるようclampする（「チャットペイン矩形内にクランプ」仕様）。
+  // #chat-view自体の矩形を基準にする＝role-bar/composeとの重なりは許容する簡易版。
+  function clampPetPos(right, bottom) {
+    var pane = petPane();
+    if (!pane) return { right: right, bottom: bottom };
+    var rect = pane.getBoundingClientRect();
+    var size = currentPetSizePx();
+    var maxRight = Math.max(0, rect.width - size);
+    var maxBottom = Math.max(0, rect.height - size);
+    return {
+      right: Math.min(maxRight, Math.max(0, right)),
+      bottom: Math.min(maxBottom, Math.max(0, bottom)),
+    };
+  }
+
+  function setPetPos(right, bottom) {
+    petPos = clampPetPos(right, bottom);
+    applyPetPosVars(petPos.right, petPos.bottom);
+    return petPos;
+  }
+
+  // --- ペットのドラッグ移動 ---
+  // #pet-hover-zoneがhover検知とドラッグ操作の両方を担う（CSS側コメントに割り切りを明記）。
+  function initPetDrag() {
+    var zone = $("pet-hover-zone");
+    var widget = $("pet-widget");
+    if (!zone) return;
+
+    zone.addEventListener("pointerdown", function (e) {
+      if (e.button !== 0) return; // 左クリック（タッチ/ペンはbutton===0扱い）のみ
+      zone.setPointerCapture(e.pointerId);
+      petDrag = {
+        pointerId: e.pointerId, startX: e.clientX, startY: e.clientY,
+        startRight: petPos.right, startBottom: petPos.bottom,
+      };
+      zone.classList.add("pet-dragging");
+      if (widget) widget.classList.add("pet-dragging");
+      e.preventDefault();
+    });
+
+    zone.addEventListener("pointermove", function (e) {
+      if (!petDrag || petDrag.pointerId !== e.pointerId) return;
+      // rightは右へ動くほど小さく、bottomは下へ動くほど小さくなる（CSSのright/bottomの向き）。
+      var dx = e.clientX - petDrag.startX;
+      var dy = e.clientY - petDrag.startY;
+      setPetPos(petDrag.startRight - dx, petDrag.startBottom - dy);
+    });
+
+    function endDrag(e) {
+      if (!petDrag || (e && petDrag.pointerId !== e.pointerId)) return;
+      var moved = e ? Math.abs(e.clientX - petDrag.startX) + Math.abs(e.clientY - petDrag.startY) : 99;
+      petDrag = null;
+      zone.classList.remove("pet-dragging");
+      if (widget) widget.classList.remove("pet-dragging");
+      if (moved < 4) {
+        // ほぼ動かないクリック＝なでなで。位置保存は不要（動いてない）
+        setPetState("love");
+        return;
+      }
+      var finalPos = petPos;
+      window.pywebview.api.save_pet_pos(Math.round(finalPos.right), Math.round(finalPos.bottom))
+        .catch(function () { /* 保存失敗は静かに無視（見た目上の位置は既に反映済み） */ });
+    }
+    zone.addEventListener("pointerup", endDrag);
+    zone.addEventListener("pointercancel", endDrag);
+  }
+
+  // ウィンドウリサイズでペインが縮み、ペットが外にはみ出た場合の表示クランプのみ
+  // （save_pet_posは呼ばない＝config.jsonの保存値は書き換えない）。
+  // 既知の限界: setPetPos()はpetPos自体をクランプ後の値で上書きするため、
+  // 縮小時にクランプが働いた場合、同一セッション内でウィンドウを再び広げても
+  // クランプ後の位置のまま（元の位置には戻らない）。config.json上の値は不変なので
+  // アプリを再起動すれば本来の位置に戻る。ペット1体の表示位置調整用途としては
+  // 許容範囲と判断し、意図した位置とクランプ後の表示位置を別変数で追跡する
+  // 二重管理はしていない（複雑さに見合わないための割り切り）。
+  window.addEventListener("resize", function () {
+    setPetPos(petPos.right, petPos.bottom);
+  });
+
+  initPetBody();
+  initPetDrag();
+
+  // --- チャット ---
+  var sending = false;
+  var stopping = false;
+  // 送信中に自分が追加した「考え中…」吹き出しへのDOM参照。応答到着/エラー/停止で
+  // これ経由で除去する。SOUL切替でchat-logがinnerHTML=""でクリアされても、
+  // remove()は親から外れた要素に対して呼んでも例外にならないため安全に無視できる。
+  var currentThinkingRow = null;
+  // FieriA拡張: ストリーミング。currentThinkingRow内の.bubble要素を「考え中」の
+  // ドットからストリーミング用プレーンテキスト表示へ切り替えた後の参照。
+  // removeThinkingBubbleでcurrentThinkingRowと一緒に必ずnullへ戻す（残骸を残さない）。
+  var streamingBubbleEl = null;
+
+  function addBubble(role, text, container, images) {
+    var row = document.createElement("div");
+    row.className = "bubble-row " + role;
+    var b = document.createElement("div");
+    b.className = "bubble";
+    if (role === "ai") {
+      // AI発言のみMarkdown整形。安全な自前パーサ（renderMarkdownToHtml）が
+      // 生成したタグだけをinnerHTMLへ入れる。userとsystemはこれまで通りtextContent。
+      b.innerHTML = renderMarkdownToHtml(text);
+    } else {
+      b.textContent = text;
+    }
+    // 添付画像のサムネイル表示は送信時のみ（imagesが渡された場合、userの発言のみ）。
+    // 復元時（今日のログ再表示・過去ログ閲覧）はテキスト参照（[画像: ...]）が
+    // そのまま出るだけでここには来ない（呼び出し側がimagesを渡さないため）。
+    if (images && images.length) {
+      var imgsBox = document.createElement("div");
+      imgsBox.className = "bubble-imgs";
+      images.forEach(function (img) {
+        if (img.mime === "application/pdf") {
+          // application/pdfは<img>で描画できないため、送信済み吹き出し内でも
+          // チップ表示にする（attach-previewと同じ理由。renderAttachPreview参照）。
+          var chip = document.createElement("div");
+          chip.className = "attach-pdf-chip bubble-pdf-chip";
+          chip.textContent = "PDF";
+          chip.title = (img._name || "PDF") + "（Gemini直読み）";
+          imgsBox.appendChild(chip);
+          return;
+        }
+        var el = document.createElement("img");
+        el.src = "data:" + img.mime + ";base64," + img.b64;
+        imgsBox.appendChild(el);
+      });
+      b.insertBefore(imgsBox, b.firstChild);
+    }
+    row.appendChild(b);
+    (container || $("chat-log")).appendChild(row);
+    return row;
+  }
+
+  // 「区切り」マーカー(who:"break")の表示。吹き出しではなく水平線様の一行を挟む。
+  function addBreakDivider(container, text) {
+    var div = document.createElement("div");
+    div.className = "break-divider";
+    div.textContent = text || "区切り";
+    (container || $("chat-log")).appendChild(div);
+    return div;
+  }
+
+  function addSystemBubble(text, isError) {
+    var row = addBubble("system", text);
+    if (isError) row.querySelector(".bubble").classList.add("error");
+    return row;
+  }
+
+  function addThinkingBubble() {
+    var row = document.createElement("div");
+    row.className = "bubble-row ai";
+    var b = document.createElement("div");
+    b.className = "bubble";
+    var dots = document.createElement("span");
+    dots.className = "thinking-dots";
+    dots.innerHTML = "<span></span><span></span><span></span>";
+    b.appendChild(dots);
+    row.appendChild(b);
+    $("chat-log").appendChild(row);
+    return row;
+  }
+
+  function removeThinkingBubble() {
+    if (currentThinkingRow) currentThinkingRow.remove();
+    currentThinkingRow = null;
+    streamingBubbleEl = null;
+    streamRawText = "";  // 次ターンへ前ターンの下書きが漏れないようリセット
+  }
+
+  // FieriA拡張: ストリーミング。Python側(gui.Bridge._flush_stream_buf)が
+  // window.evaluate_jsで叩く着地点。「考え中」バブルの中身をプレーンテキスト表示へ
+  // 切り替え（初回呼び出し時のみ）、以降は差分をそのままappendする。
+  // .bubbleは既存CSSでwhite-space:pre-wrap済みなので追加のスタイル指定は不要。
+  // ターン完了・停止・エラーいずれの経路でもremoveThinkingBubbleが必ず呼ばれ
+  // currentThinkingRow/streamingBubbleElがnullに戻るため、応答完了後に遅れて届いた
+  // 差分（万一のタイミング）はbubbleがnullのまま静かに無視される。
+  function ensureStreamingBubble() {
+    if (streamingBubbleEl) return streamingBubbleEl;
+    if (!currentThinkingRow) return null;
+    var bubble = currentThinkingRow.querySelector(".bubble");
+    if (!bubble) return null;
+    bubble.innerHTML = "";
+    streamingBubbleEl = bubble;
+    return streamingBubbleEl;
+  }
+
+  // ストリーム生テキストの累積。ツール呼び出しのfieria-toolブロック（完結分も
+  // 書きかけ分も）を下書き表示から隠すため、累積全体に対してフィルタをかけ直す。
+  // 最終表示はsend_message完了時にパース済み本文へ差し替わるので、ここは
+  // あくまで「流れてる感」のための下書き。
+  var streamRawText = "";
+  function filterStreamDraft(raw) {
+    return raw
+      .replace(/```fieria-tool[\s\S]*?```/g, "（記憶ツールを使用中…）")
+      .replace(/```fieria-tool[\s\S]*$/, "（記憶ツールを使用中…）");
+  }
+  window.onStreamDelta = function (text) {
+    var bubble = ensureStreamingBubble();
+    if (!bubble) return;
+    streamRawText += text;
+    bubble.textContent = filterStreamDraft(streamRawText);
+    scrollChatToBottom();
+  };
+
+  // ツール実行状態の通知（Python側 gui._push_turn_status から）。ストリームが
+  // 流れ終わった後の「無言の間」（記憶書き込み・追加ラウンド）を可視化する。
+  // チップは考え中行(currentThinkingRow)にぶら下げるので、ターン完了・停止・
+  // エラーの全経路で removeThinkingBubble と一緒に消える（残骸なし）。
+  window.onTurnStatus = function (kind) {
+    if (!currentThinkingRow) return;
+    var chip = currentThinkingRow.querySelector(".turn-status-chip");
+    if (!chip) {
+      chip = document.createElement("div");
+      chip.className = "turn-status-chip";
+      currentThinkingRow.appendChild(chip);
+    }
+    chip.textContent = (kind === "memory_write") ? "💾 記憶を書き込み中…" : "🔧 記憶ツールを実行中…";
+    if (kind === "memory_write") setPetState("writing");
+    scrollChatToBottom();
+  };
+
+  // --- 画像添付（ファイル選択 / クリップボード貼り付け） ---
+  var ATTACH_MIME_ALLOW = { "image/png": 1, "image/jpeg": 1, "image/webp": 1, "image/gif": 1 };
+  var ATTACH_MAX_BYTES = 5 * 1024 * 1024; // 5MB（b64膨張・API制限対策）
+  // PDFは現物が画像より大きいため別枠。ページ画像化はPython側(render_pdf)で行うので
+  // フロント側は「元PDFファイル」のサイズだけをここで見る。
+  var PDF_MAX_BYTES = 20 * 1024 * 1024; // 20MB
+  // Geminiネイティブ添付（PDFをページ画像化せずbase64のまま渡す）の上限。
+  // Geminiのリクエスト上限20MBに対し、base64化で約1.37倍に膨張する分の余裕を見て14MBとする。
+  var PDF_NATIVE_MAX_BYTES = 14 * 1024 * 1024; // 14MB
+  var attachedImages = []; // [{mime, b64}]（PDFの各ページもここに画像として積む。ネイティブPDFはmime:"application/pdf"のまま1件）
+
+  function setAttachError(msg) {
+    $("attach-error").textContent = msg || "";
+  }
+
+  function renderAttachPreview() {
+    var box = $("attach-preview");
+    box.innerHTML = "";
+    attachedImages.forEach(function (img, idx) {
+      var thumb = document.createElement("div");
+      thumb.className = "attach-thumb";
+      if (img.mime === "application/pdf") {
+        // application/pdfは<img>で描画できないため、チップ表示にする
+        // （Gemini直読み添付。実ページはPython側で見るのでサムネイル画像は無い）。
+        var chip = document.createElement("div");
+        chip.className = "attach-pdf-chip";
+        chip.textContent = "PDF";
+        chip.title = (img._name || "PDF") + "（Gemini直読み）";
+        thumb.appendChild(chip);
+      } else {
+        var el = document.createElement("img");
+        el.src = "data:" + img.mime + ";base64," + img.b64;
+        thumb.appendChild(el);
+      }
+      var rm = document.createElement("button");
+      rm.type = "button";
+      rm.className = "attach-remove";
+      rm.textContent = "×";
+      rm.addEventListener("click", function () {
+        attachedImages.splice(idx, 1);
+        renderAttachPreview();
+      });
+      thumb.appendChild(rm);
+      box.appendChild(thumb);
+    });
+  }
+
+  function isPdfFile(file) {
+    return file.type === "application/pdf" ||
+      /\.pdf$/i.test(file.name || "");
+  }
+
+  function addImageFile(file) {
+    if (isPdfFile(file)) {
+      addPdfFile(file);
+      return;
+    }
+    if (!ATTACH_MIME_ALLOW[file.type]) {
+      setAttachError("対応していない画像形式: " + (file.type || "不明"));
+      return;
+    }
+    if (file.size > ATTACH_MAX_BYTES) {
+      setAttachError("画像が大きすぎる（5MB超）: " + file.name);
+      return;
+    }
+    setAttachError("");
+    var reader = new FileReader();
+    reader.onload = function () {
+      var result = reader.result || "";
+      var b64 = String(result).split(",")[1] || "";
+      attachedImages.push({ mime: file.type, b64: b64 });
+      renderAttachPreview();
+    };
+    reader.readAsDataURL(file);
+  }
+
+  // PDFは現プロバイダがGemini（pdf_native_supported）ならページ画像化せずbase64のまま
+  // application/pdfとして添付する（Geminiがネイティブに全ページを読む）。それ以外の
+  // プロバイダはこれまでどおりPython側(render_pdf)でページ画像化してから積む
+  // （テキスト抽出ではなく、レイアウト・図表込みでvision LLMに見せるため）。
+  // どちらの経路でもattachedImagesの形は既存の画像添付と同じ（[{mime, b64}]）なので、
+  // send_message側はPDF由来かどうかを意識しない。
+  function addPdfFile(file) {
+    if (file.size > PDF_MAX_BYTES) {
+      setAttachError("PDFが大きすぎる（20MB超）: " + file.name);
+      return;
+    }
+    setAttachError("");
+    var reader = new FileReader();
+    reader.onload = function () {
+      var result = reader.result || "";
+      var b64 = String(result).split(",")[1] || "";
+      window.pywebview.api.pdf_native_supported().then(function (native) {
+        if (native) {
+          addPdfNative(file, b64);
+        } else {
+          addPdfRendered(file, b64);
+        }
+      }).catch(function () {
+        // 判定自体に失敗したら、これまでどおりの画像化経路へフォールバックする
+        // （プロバイダ非対応でも壊れず添付できる安全側）。
+        addPdfRendered(file, b64);
+      });
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function addPdfNative(file, b64) {
+    if (file.size > PDF_NATIVE_MAX_BYTES) {
+      setAttachError("PDFが大きすぎる（Gemini直読みは14MBまで）: " + file.name);
+      return;
+    }
+    attachedImages.push({ mime: "application/pdf", b64: b64, _name: file.name });
+    renderAttachPreview();
+  }
+
+  function addPdfRendered(file, b64) {
+    window.pywebview.api.render_pdf(b64).then(function (res) {
+      if (!res || !res.ok) {
+        setAttachError("PDFの読み込みに失敗した: " + (res && res.error || "不明なエラー") + " (" + file.name + ")");
+        return;
+      }
+      res.pages.forEach(function (p) {
+        attachedImages.push({ mime: p.mime, b64: p.b64 });
+      });
+      renderAttachPreview();
+      // showToastは設定画面の保存系操作専用（上のコメント参照）なので、チャット欄では
+      // 既存のattach-error領域を使って知らせる（エラーではないが表示先を統一する）。
+      if (res.truncated) {
+        setAttachError("全" + res.total_pages + "ページ中" + res.pages.length + "ページまで添付した");
+      }
+    }).catch(function (err) {
+      setAttachError("PDFの読み込みに失敗した: " + err + " (" + file.name + ")");
+    });
+  }
+
+  $("attach-btn").addEventListener("click", function () {
+    if (sending) return;
+    $("attach-file-input").click();
+  });
+
+  // 「区切り」: 直近の会話文脈だけをリセットする（記憶・ログは消えない）。
+  // confirmダイアログは挟まない——ログに全部残る非破壊操作なので、誤爆しても
+  // 実害が無く、確認を挟むほどの操作ではないと判断（代わりに区切り線の表示自体を
+  // 「押した結果が見える」フィードバックとする）。
+  $("break-btn").addEventListener("click", function () {
+    if (sending) return;
+    window.pywebview.api.insert_break().then(function (result) {
+      if (!result || !result.ok) return;
+      $("chat-log").innerHTML = "";
+      addBreakDivider($("chat-log"), "── 区切り ──（これまでの会話はログにある）");
+    });
+  });
+
+  $("attach-file-input").addEventListener("change", function (e) {
+    var files = Array.prototype.slice.call(e.target.files || []);
+    files.forEach(addImageFile);
+    e.target.value = ""; // 同じファイルを続けて選び直せるようにする
+  });
+
+  // スクショ等のクリップボード貼り付け（主要導線）
+  $("input-box").addEventListener("paste", function (e) {
+    var items = (e.clipboardData && e.clipboardData.items) || [];
+    var found = false;
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].type && items[i].type.indexOf("image/") === 0) {
+        var file = items[i].getAsFile();
+        if (file) { addImageFile(file); found = true; }
+      }
+    }
+    if (found) e.preventDefault(); // 画像を拾えたら、テキストとしての二重貼り付けは防ぐ
+  });
+
+  function setComposeState() {
+    var btn = $("send-btn");
+    if (!sending) {
+      btn.textContent = "送信";
+      btn.disabled = false;
+    } else if (stopping) {
+      btn.textContent = "停止中…";
+      btn.disabled = true;
+    } else {
+      btn.textContent = "停止";
+      btn.disabled = false;
+    }
+    $("attach-btn").disabled = sending;
+    // 送信中（応答生成中）は区切りボタンをdisableする。サーバ側(gui.Bridge)には
+    // 「送信中」を示す排他ロックが無い（stop_turnの実装コメント参照:
+    // pywebviewは各API呼び出しを別スレッドで走らせるため、厳密な排他ができない）
+    // ため、ここでのUI側disableが実質的な誤爆防止策そのもの。
+    $("break-btn").disabled = sending;
+    updateEngineLockButtons();
+  }
+
+  // 送信中はSOUL切替・新規SOUL作成を無効化する。send_message実行中に
+  // switch_soul/create_soulが呼ばれるとBridge._engineが差し替わり、
+  // 送信中ターンへのstop_turn()が新Engineに届いて空振りするため（旧ターンには効かない）。
+  // SOUL編集の保存（update_soul_identity）はEngineを差し替えないため対象外。
+  function updateEngineLockButtons() {
+    var swBtns = document.querySelectorAll("#soul-list .soul-switch-btn");
+    for (var i = 0; i < swBtns.length; i++) swBtns[i].disabled = sending;
+    var createBtn = $("create-soul-btn");
+    if (createBtn) createBtn.disabled = sending && !editingSoulId;
+  }
+
+  function addOperations(afterRow, operations, openByDefault) {
+    if (!operations || !operations.length) return;
+    var det = document.createElement("details");
+    det.className = "ops";
+    if (openByDefault) det.open = true;
+    var first = operations[0];
+    var label = OP_LABELS[first.op] || first.op;
+    var summary = document.createElement("summary");
+    summary.textContent = operations.length > 1
+      ? (label + " ほか" + (operations.length - 1) + "件")
+      : label;
+    det.appendChild(summary);
+    operations.forEach(function (op) {
+      var line = document.createElement("div");
+      line.className = "op-line" + (op.ok ? "" : " fail");
+      var mark = op.ok ? "✓" : "✗";
+      line.textContent = mark + " " + (OP_LABELS[op.op] || op.op) + ": " + op.detail;
+      det.appendChild(line);
+    });
+    afterRow.parentNode.insertBefore(det, afterRow.nextSibling);
+  }
+
+  function scrollChatToBottom() {
+    var log = $("chat-log");
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function sendMessage() {
+    var box = $("input-box");
+    var text = box.value.trim();
+    var images = attachedImages.slice();
+    if ((!text && !images.length) || sending) return;
+    sending = true;
+    stopping = false;
+    setComposeState();
+    // 応答待ち中にSOUL切替/新規作成が起きた場合、古いSOULへの応答が今の画面に
+    // 紛れ込まないためのレースガード（identityRequestSeqと同じ考え方）。ログ自体は
+    // engine.process_turn内で既に永続化済みなので、表示をスキップしても記憶は失われない。
+    var soulAtSend = state.active_soul;
+    addBubble("user", text, null, images);
+    box.value = "";
+    box.style.height = "auto";  // 送信後は1行の高さに戻す（autoGrowInputと対）
+    updateSendHint();
+    attachedImages = [];
+    renderAttachPreview();
+    setAttachError("");
+    currentThinkingRow = addThinkingBubble();
+    setPetState("thinking");
+    scrollChatToBottom();
+
+    window.pywebview.api.send_message(text, images).then(function (result) {
+      sending = false;
+      stopping = false;
+      setComposeState();
+      removeThinkingBubble();
+      if (state.active_soul !== soulAtSend) {
+        // 待機中にSOULが変わっていたら、成功/失敗問わず古い応答は画面に出さない
+        setPetState("idle");
+        return;
+      }
+      if (result && result.error) {
+        setPetState("error");
+        addSystemBubble(result.error, true);
+        scrollChatToBottom();
+        return;
+      }
+      if (result && result.stopped) {
+        setPetState("idle");
+        var hasOps = result.operations && result.operations.length;
+        var sysRow = addSystemBubble(
+          hasOps ? "（応答を停止した・実行済みの記憶操作あり）" : "（応答を停止した）",
+          false
+        );
+        if (hasOps) addOperations(sysRow, result.operations, true);
+        scrollChatToBottom();
+        return;
+      }
+      setPetState(petStateAfterTurn(result));
+      var row = addBubble("ai", result.reply || "");
+      addOperations(row, result.operations);
+      // AIがswitch_roleツールで自分から切り替えていたら、ロールバー表示を更新する
+      // （手動のpickRoleと同じ表示更新を、応答受信のたびにも行う）。
+      if (result.active_role !== undefined && result.active_role !== state.active_role) {
+        state.active_role = result.active_role;
+        renderRoleBar();
+      }
+      scrollChatToBottom();
+      renderDiary();
+      renderSideFiles();
+    }).catch(function () {
+      sending = false;
+      stopping = false;
+      setComposeState();
+      removeThinkingBubble();
+      setPetState("error");
+    });
+  }
+
+  function stopSending() {
+    if (!sending || stopping) return;
+    stopping = true;
+    setComposeState();
+    window.pywebview.api.stop_turn();
+  }
+
+  $("send-btn").addEventListener("click", function () {
+    if (sending) {
+      stopSending();
+    } else {
+      sendMessage();
+    }
+  });
+  // Enter1回=改行、直後にもう一度Enter（末尾が改行のまま・カーソルが文末）で送信。
+  // IME変換確定のEnter（isComposing / keyCode 229）は絶対に横取りしない。
+  function updateSendHint() {
+    var box = $("input-box");
+    var atEnd = box.selectionStart === box.value.length && box.selectionEnd === box.value.length;
+    var trailingNewline = box.value.length > 0 && box.value.charAt(box.value.length - 1) === "\n";
+    $("send-hint").style.display = (atEnd && trailingNewline) ? "" : "none";
+  }
+  $("input-box").addEventListener("keydown", function (e) {
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key !== "Enter") return;
+    if (e.ctrlKey) {
+      e.preventDefault();
+      sendMessage();
+      return;
+    }
+    if (e.shiftKey) return; // 常に改行（デフォルト動作に任せる）
+    var box = e.target;
+    var atEnd = box.selectionStart === box.value.length && box.selectionEnd === box.value.length;
+    var trailingNewline = box.value.length > 0 && box.value.charAt(box.value.length - 1) === "\n";
+    if (atEnd && trailingNewline) {
+      e.preventDefault();
+      box.value = box.value.slice(0, -1);
+      sendMessage();
+    }
+    // それ以外はデフォルト動作（改行挿入）に任せる
+  });
+  // 入力量に合わせてテキストボックス自体を伸ばす（max-height=40vhまで。
+  // それ以降はスクロール）。height:autoで一度縮めてからscrollHeightに合わせる
+  // 定番手法。行削除時にも正しく縮む。
+  function autoGrowInput() {
+    var box = $("input-box");
+    box.style.height = "auto";
+    box.style.height = box.scrollHeight + "px";
+  }
+  $("input-box").addEventListener("input", updateSendHint);
+  $("input-box").addEventListener("input", autoGrowInput);
+  $("input-box").addEventListener("keyup", updateSendHint);
+  $("input-box").addEventListener("click", updateSendHint);
+
+  // --- ロール切替 ---
+  function renderRoleBar() {
+    $("role-current").textContent = state.active_role || "（設定なし）";
+    var menu = $("role-menu");
+    menu.innerHTML = "";
+    var noneItem = document.createElement("div");
+    noneItem.className = "item";
+    noneItem.textContent = "（設定なし）";
+    noneItem.addEventListener("click", function () { pickRole(null); });
+    menu.appendChild(noneItem);
+    state.roles.forEach(function (r) {
+      var item = document.createElement("div");
+      item.className = "item";
+      item.textContent = r.name;
+      item.addEventListener("click", function () { pickRole(r.name); });
+      menu.appendChild(item);
+    });
+    var manage = document.createElement("div");
+    manage.className = "item sep";
+    manage.textContent = "ロール管理…";
+    manage.addEventListener("click", function () {
+      menu.classList.remove("open");
+      document.querySelector('.nav-btn[data-view="settings"]').click();
+    });
+    menu.appendChild(manage);
+  }
+
+  function pickRole(name) {
+    window.pywebview.api.switch_role(name).then(function (r) {
+      state.active_role = r.active_role;
+      renderRoleBar();
+      $("role-menu").classList.remove("open");
+    });
+  }
+
+  $("role-current").addEventListener("click", function (e) {
+    e.stopPropagation();
+    $("role-menu").classList.toggle("open");
+  });
+  document.addEventListener("click", function () { $("role-menu").classList.remove("open"); });
+
+  // --- 記憶ビュー ---
+  function loadMemoryTree() {
+    window.pywebview.api.list_soul_files().then(function (files) {
+      var tree = $("mem-tree");
+      tree.innerHTML = "";
+      if (!files.length) {
+        var empty = document.createElement("div");
+        empty.className = "hint";
+        empty.textContent = "まだファイルが無い";
+        tree.appendChild(empty);
+        return;
+      }
+      files.forEach(function (f) {
+        var item = document.createElement("div");
+        item.className = "file-item";
+        item.textContent = f;
+        item.addEventListener("click", function () {
+          document.querySelectorAll("#mem-tree .file-item").forEach(function (x) { x.classList.remove("active"); });
+          item.classList.add("active");
+          window.pywebview.api.read_soul_file(f).then(function (content) {
+            var body = $("mem-body");
+            body.classList.remove("empty");
+            body.textContent = content || "（空のファイル）";
+          });
+        });
+        tree.appendChild(item);
+      });
+    });
+  }
+
+  // --- ログビュー（読むだけ。スレッド再開・編集は思想的に不採用） ---
+  function loadLogTree() {
+    window.pywebview.api.list_log_dates().then(function (dates) {
+      var tree = $("log-tree");
+      tree.innerHTML = "";
+      if (!dates.length) {
+        var empty = document.createElement("div");
+        empty.className = "hint";
+        empty.textContent = "まだログが無い";
+        tree.appendChild(empty);
+        return;
+      }
+      var today = todayStr();
+      dates.forEach(function (d) {
+        var item = document.createElement("div");
+        item.className = "file-item";
+        item.textContent = d === today ? d + "（今日）" : d;
+        item.addEventListener("click", function () {
+          document.querySelectorAll("#log-tree .file-item").forEach(function (x) { x.classList.remove("active"); });
+          item.classList.add("active");
+          window.pywebview.api.read_log(d).then(function (entries) {
+            renderLogBody(entries);
+          });
+        });
+        tree.appendChild(item);
+      });
+    });
+  }
+
+  function renderLogBody(entries) {
+    var body = $("log-body");
+    body.classList.remove("empty");
+    body.innerHTML = "";
+    if (!entries || !entries.length) {
+      body.classList.remove("log-view");
+      body.classList.add("empty");
+      body.textContent = "（この日のログは空）";
+      return;
+    }
+    body.classList.add("log-view");
+    entries.forEach(function (entry) {
+      if (entry.who === "break") {
+        addBreakDivider(body, "── 区切り ──");
+      } else {
+        addBubble(entry.who, entry.text, body);
+      }
+    });
+  }
+
+  // --- 右パネル ---
+  function todayStr() {
+    var d = new Date();
+    var m = String(d.getMonth() + 1).padStart(2, "0");
+    var day = String(d.getDate()).padStart(2, "0");
+    return d.getFullYear() + "-" + m + "-" + day;
+  }
+
+  function diaryTitleFor(dateStr) {
+    var today = todayStr();
+    if (dateStr === today) return "今日の日記";
+    var d = new Date(today + "T00:00:00");
+    d.setDate(d.getDate() - 1);
+    var yesterday = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+    if (dateStr === yesterday) return "昨日の日記";
+    var parts = dateStr.split("-");
+    return parseInt(parts[1], 10) + "/" + parseInt(parts[2], 10) + " の日記";
+  }
+
+  function renderDiary() {
+    if (!state.active_soul) return;
+    window.pywebview.api.get_latest_diary().then(function (diary) {
+      var title = $("diary-title");
+      var body = $("diary-body");
+      if (diary && diary.date && diary.text && diary.text.trim()) {
+        title.textContent = diaryTitleFor(diary.date);
+        body.classList.remove("empty");
+        body.textContent = diary.text;
+      } else {
+        title.textContent = "日記";
+        body.classList.add("empty");
+        body.textContent = "まだ日記はない（初日の終わりに書かれる）";
+      }
+    });
+  }
+
+  // renderSideFilesはSOUL切替時とメッセージ送信完了ごとに呼ばれる（都度全消去→再構築）。
+  // wiki/等のフォルダはターンが進むたびにファイルが増えるため、開閉状態をここに覚えておいて
+  // 再構築のたびに復元する（覚えなければ毎ターン閉じに戻ってUXを損なう）。
+  var sideGroupsOpen = {};
+
+  function renderSideFiles() {
+    if (!state.active_soul) { $("side-files").innerHTML = ""; return; }
+    window.pywebview.api.list_soul_files().then(function (files) {
+      var box = $("side-files");
+      box.innerHTML = "";
+      if (!files.length) {
+        box.innerHTML = '<div class="hint">まだファイルが無い</div>';
+        return;
+      }
+
+      function makeFileItem(f, label) {
+        var item = document.createElement("div");
+        item.className = "file-item";
+        item.textContent = label;
+        item.addEventListener("click", function () {
+          window.pywebview.api.read_soul_file(f).then(function (content) {
+            openModal(f, content || "（空のファイル）");
+          });
+        });
+        return item;
+      }
+
+      // トップレベル（パスに"/"を含まない）は従来どおりフラットに表示。
+      // フォルダ配下（wiki/ 等）はフォルダごとに<details>でグループ化し、既定は閉じ。
+      var topFiles = [];
+      var groups = {};
+      var groupOrder = [];
+      files.forEach(function (f) {
+        var slash = f.indexOf("/");
+        if (slash === -1) {
+          topFiles.push(f);
+          return;
+        }
+        var folder = f.slice(0, slash);
+        if (!groups[folder]) { groups[folder] = []; groupOrder.push(folder); }
+        groups[folder].push(f);
+      });
+
+      topFiles.forEach(function (f) {
+        box.appendChild(makeFileItem(f, f));
+      });
+
+      groupOrder.forEach(function (folder) {
+        var list = groups[folder];
+        var det = document.createElement("details");
+        det.className = "file-group";
+        det.open = !!sideGroupsOpen[folder];
+        det.addEventListener("toggle", function () {
+          sideGroupsOpen[folder] = det.open;
+        });
+        var summary = document.createElement("summary");
+        summary.textContent = folder + " (" + list.length + ")";
+        det.appendChild(summary);
+        list.forEach(function (f) {
+          det.appendChild(makeFileItem(f, f.slice(folder.length + 1)));
+        });
+        box.appendChild(det);
+      });
+    });
+  }
+
+  // --- モーダル ---
+  function openModal(title, body) {
+    $("modal-title").textContent = title;
+    $("modal-body").textContent = body;
+    $("modal-overlay").classList.add("open");
+  }
+  $("modal-close").addEventListener("click", function () {
+    $("modal-overlay").classList.remove("open");
+  });
+  $("modal-overlay").addEventListener("click", function (e) {
+    if (e.target === $("modal-overlay")) $("modal-overlay").classList.remove("open");
+  });
+
+  // --- 設定ビュー ---
+  var editingSoulId = null;
+  // get_soul_identity応答待ち中に状態が変わった（切替/別SOULの編集/フォームリセット）
+  // 場合に、古い応答をフォームへ反映しないためのレースガード。
+  // 編集クリック時にその時点の値を控え、応答到達時に値が変わっていたら反映をスキップする。
+  var identityRequestSeq = 0;
+
+  function resetSoulForm() {
+    editingSoulId = null;
+    identityRequestSeq++;
+    $("new-soul-name").value = "";
+    $("new-soul-name").disabled = false;
+    $("new-soul-identity").value = "";
+    $("new-soul-speech").value = "";
+    $("new-soul-inherit-user").value = "";
+    $("create-soul-btn").textContent = "SOULを作る";
+    renderInheritUserOptions();
+    updateEngineLockButtons();
+  }
+
+  // 新規作成フォームの「ユーザー理解を引き継ぐ」セレクトを、既存SOUL一覧から
+  // 組み立て直す。SOULが1体も無ければ行ごと隠す（引き継ぎ元が存在しえないため）。
+  // 編集モード中（editingSoulId有り）も隠す：引き継ぎは新規作成時だけの機能で、
+  // update_soul_identityにはinherit_user_from相当の引数が無い（1回きりコピーの
+  // 思想上、既存SOULへ後から流し込む経路はあえて作らない）。
+  function renderInheritUserOptions() {
+    var row = $("new-soul-inherit-row");
+    var select = $("new-soul-inherit-user");
+    if (editingSoulId || state.souls.length === 0) {
+      row.style.display = "none";
+      return;
+    }
+    row.style.display = "";
+    var current = select.value;
+    select.innerHTML = "";
+    var noneOpt = document.createElement("option");
+    noneOpt.value = "";
+    noneOpt.textContent = "引き継がない";
+    select.appendChild(noneOpt);
+    state.souls.forEach(function (s) {
+      var opt = document.createElement("option");
+      opt.value = s.id;
+      opt.textContent = s.name;
+      select.appendChild(opt);
+    });
+    if (state.souls.some(function (s) { return s.id === current; })) {
+      select.value = current;
+    }
+  }
+
+  function renderSoulList() {
+    var box = $("soul-list");
+    box.innerHTML = "";
+    renderInheritUserOptions();
+    state.souls.forEach(function (s) {
+      var row = document.createElement("div");
+      row.className = "list-item";
+      var name = document.createElement("span");
+      name.className = "name" + (s.id === state.active_soul ? " active-tag" : "");
+      name.textContent = s.name;
+      row.appendChild(name);
+      var btns = document.createElement("div");
+      btns.className = "btns";
+      if (s.id !== state.active_soul) {
+        var swBtn = document.createElement("button");
+        swBtn.className = "ghost soul-switch-btn";
+        swBtn.textContent = "切替";
+        swBtn.disabled = sending;
+        swBtn.addEventListener("click", function () {
+          identityRequestSeq++;  // 編集応答待ちがあれば無効化（レースガード）
+          window.pywebview.api.switch_soul(s.id).then(function (data) {
+            applyBoot(data);
+            renderSoulList();
+            if (data && data.error) {
+              showToast(data.error, "error");
+            } else {
+              showToast("SOULを切り替えた");
+            }
+          }).catch(function (err) {
+            showToast("切り替えに失敗した: " + err, "error");
+          });
+        });
+        btns.appendChild(swBtn);
+      }
+      var editBtn = document.createElement("button");
+      editBtn.className = "ghost";
+      editBtn.textContent = "編集";
+      editBtn.addEventListener("click", function () {
+        var mySeq = ++identityRequestSeq;
+        window.pywebview.api.get_soul_identity(s.id).then(function (parts) {
+          if (mySeq !== identityRequestSeq) return;  // 待機中に状態変化→古い応答は破棄
+          editingSoulId = s.id;
+          // parts.name は生の値（未設定なら空文字）。s.name は一覧表示用に
+          // 「（名前未定）」へフォールバック済みなので、編集フォームの初期値には
+          // 使わない（使うと無変更保存でその文言がname.txtへ書き込まれてしまう）。
+          $("new-soul-name").value = parts.name || "";
+          $("new-soul-name").disabled = false;
+          $("new-soul-identity").value = parts.core;
+          $("new-soul-speech").value = parts.speech_style;
+          $("create-soul-btn").textContent = "SOULを更新";
+          renderInheritUserOptions();
+          updateEngineLockButtons();
+        });
+      });
+      btns.appendChild(editBtn);
+      row.appendChild(btns);
+      box.appendChild(row);
+    });
+  }
+
+  $("create-soul-btn").addEventListener("click", function () {
+    var identity = $("new-soul-identity").value;
+    var speech = $("new-soul-speech").value;
+    if (editingSoulId) {
+      var editedId = editingSoulId;
+      var newName = $("new-soul-name").value;
+      // 改名(rename_soul)とidentity/speech更新(update_soul_identity)は別APIなので
+      // 両方呼ぶ。片方が失敗してももう片方の結果は反映されうるため、エラーは
+      // まとめて集約して1回のトーストで報告する。
+      Promise.all([
+        window.pywebview.api.rename_soul(editedId, newName),
+        window.pywebview.api.update_soul_identity(editedId, identity, speech),
+      ]).then(function (results) {
+        var renameResult = results[0];
+        var identityResult = results[1];
+        if (renameResult && renameResult.ok && renameResult.name !== undefined) {
+          var entry = state.souls.find(function (s) { return s.id === editedId; });
+          if (entry) entry.name = renameResult.name || "（名前未定）";
+          if (editedId === state.active_soul) {
+            $("soul-name-label").textContent = renameResult.name || "（名前未定）";
+          }
+          renderSoulList();
+        }
+        resetSoulForm();
+        var errors = [];
+        if (!renameResult || renameResult.ok === false) errors.push(renameResult && renameResult.error || "改名に失敗した");
+        if (identityResult && identityResult.ok === false) errors.push(identityResult.error || "SOULの更新に失敗した");
+        if (errors.length) {
+          showToast(errors.join(" / "), "error");
+        } else {
+          showToast("SOULを更新した");
+        }
+      }).catch(function (err) {
+        showToast("SOULの更新に失敗した: " + err, "error");
+      });
+      return;
+    }
+    var name = $("new-soul-name").value.trim();
+    var inheritFrom = $("new-soul-inherit-user").value || null;
+    window.pywebview.api.create_soul(name, identity, speech, inheritFrom).then(function (data) {
+      applyBoot(data);
+      renderSoulList();
+      resetSoulForm();
+      if (data && data.error) {
+        showToast(data.error, "error");
+      } else {
+        showToast("SOULを作った");
+      }
+    }).catch(function (err) {
+      showToast("SOULの作成に失敗した: " + err, "error");
+    });
+  });
+
+  $("clear-soul-form-btn").addEventListener("click", function () {
+    resetSoulForm();
+  });
+
+  var editingRole = null;
+
+  function renderAutoRoleSwitch() {
+    if (!state.settings) return;
+    $("auto-role-switch-enabled").checked = !!state.settings.auto_role_switch;
+    $("skill-auto-create-enabled").checked = !!state.settings.skill_auto_create;
+  }
+
+  $("auto-role-switch-enabled").addEventListener("change", function () {
+    var payload = { auto_role_switch: $("auto-role-switch-enabled").checked };
+    window.pywebview.api.save_settings(payload).then(function (data) {
+      state.settings = data;
+      renderAutoRoleSwitch();
+      showToast("ロールの自動切替設定を保存した");
+    }).catch(function (err) {
+      showToast("保存に失敗した: " + err, "error");
+    });
+  });
+
+  $("skill-auto-create-enabled").addEventListener("change", function () {
+    var payload = { skill_auto_create: $("skill-auto-create-enabled").checked };
+    window.pywebview.api.save_settings(payload).then(function (data) {
+      state.settings = data;
+      renderAutoRoleSwitch();
+      showToast("スキルの自律作成設定を保存した");
+    }).catch(function (err) {
+      showToast("保存に失敗した: " + err, "error");
+    });
+  });
+
+  function renderRoleList() {
+    var box = $("role-list");
+    box.innerHTML = "";
+    state.roles.forEach(function (r) {
+      var row = document.createElement("div");
+      row.className = "list-item";
+      var name = document.createElement("span");
+      name.className = "name" + (r.name === state.active_role ? " active-tag" : "");
+      name.textContent = r.name;
+      row.appendChild(name);
+      var btns = document.createElement("div");
+      btns.className = "btns";
+      var editBtn = document.createElement("button");
+      editBtn.className = "ghost";
+      editBtn.textContent = "編集";
+      editBtn.addEventListener("click", function () {
+        editingRole = r.name;
+        $("role-name-input").value = r.name;
+        $("role-prompt-input").value = r.prompt;
+      });
+      var delBtn = document.createElement("button");
+      delBtn.className = "ghost";
+      delBtn.textContent = "削除";
+      delBtn.addEventListener("click", function () {
+        window.pywebview.api.delete_role(r.name).then(function (data) {
+          state.roles = data.roles;
+          renderRoleList();
+          renderRoleBar();
+          showToast("ロールを削除した");
+        }).catch(function (err) {
+          showToast("削除に失敗した: " + err, "error");
+        });
+      });
+      btns.appendChild(editBtn);
+      btns.appendChild(delBtn);
+      row.appendChild(btns);
+      box.appendChild(row);
+    });
+  }
+
+  $("save-role-btn").addEventListener("click", function () {
+    var name = $("role-name-input").value.trim();
+    if (!name) return;
+    var prompt = $("role-prompt-input").value;
+    window.pywebview.api.save_role(name, prompt).then(function (data) {
+      state.roles = data.roles;
+      renderRoleList();
+      renderRoleBar();
+      $("role-name-input").value = "";
+      $("role-prompt-input").value = "";
+      editingRole = null;
+      showToast("ロールを保存した");
+    }).catch(function (err) {
+      showToast("保存に失敗した: " + err, "error");
+    });
+  });
+
+  $("clear-role-form-btn").addEventListener("click", function () {
+    $("role-name-input").value = "";
+    $("role-prompt-input").value = "";
+    editingRole = null;
+  });
+
+  function renderFactLayer() {
+    if (!state.settings) return;
+    var fl = state.settings.fact_layer || {};
+    $("fact-enabled").checked = !!fl.enabled;
+    $("fact-custom-text").value = fl.custom_text || "";
+    $("fact-default-text").textContent = state.settings.default_fact_text || "";
+  }
+
+  $("save-fact-btn").addEventListener("click", function () {
+    var payload = {
+      fact_layer: {
+        enabled: $("fact-enabled").checked,
+        custom_text: $("fact-custom-text").value,
+      },
+    };
+    window.pywebview.api.save_settings(payload).then(function (data) {
+      state.settings = data;
+      renderFactLayer();
+      showToast("事実層の設定を保存した");
+    }).catch(function (err) {
+      showToast("保存に失敗した: " + err, "error");
+    });
+  });
+
+  // プロンプト透視: 開くたびにgui.get_current_prompt()を叩き直す（キャッシュしない）。
+  $("show-prompt-btn").addEventListener("click", function () {
+    window.pywebview.api.get_current_prompt().then(function (data) {
+      var title = "プロンプト透視（約" + (data.approx_tokens || 0) + "トークン / "
+        + (data.chars || 0) + "字）";
+      openModal(title, data.text || "（SOULが未設定のため空）");
+    });
+  });
+
+  function renderWorkspaceCard() {
+    if (!state.settings) return;
+    $("workspace-dir-input").value = state.settings.workspace_dir || "";
+  }
+
+  $("save-workspace-btn").addEventListener("click", function () {
+    var payload = { workspace_dir: $("workspace-dir-input").value.trim() };
+    window.pywebview.api.save_settings(payload).then(function (data) {
+      state.settings = data;
+      renderWorkspaceCard();
+      showToast("作業フォルダを保存した");
+    }).catch(function (err) {
+      showToast("保存に失敗した: " + err, "error");
+    });
+  });
+
+  function renderAutoRecallCard() {
+    if (!state.settings) return;
+    var ar = state.settings.auto_recall || {};
+    $("auto-recall-enabled").checked = ar.enabled !== false;
+    $("auto-recall-max-hits").value = ar.max_hits != null ? ar.max_hits : 3;
+  }
+
+  $("save-auto-recall-btn").addEventListener("click", function () {
+    var payload = {
+      auto_recall: {
+        enabled: $("auto-recall-enabled").checked,
+        max_hits: parseInt($("auto-recall-max-hits").value, 10) || 3,
+      },
+    };
+    window.pywebview.api.save_settings(payload).then(function (data) {
+      state.settings = data;
+      renderAutoRecallCard();
+      showToast("連想記憶の設定を保存した");
+    }).catch(function (err) {
+      showToast("保存に失敗した: " + err, "error");
+    });
+  });
+
+  function renderPetCard() {
+    if (!state.settings) return;
+    $("pet-enabled-checkbox").checked = state.settings.pet_enabled !== false;
+    $("pet-character-select").value = state.settings.pet_character || "konoha";
+    var size = state.settings.pet_size || 64;
+    $("pet-size-input").value = size;
+    $("pet-size-value").textContent = size + "px";
+    // 保存済みの実値へ強制的に揃え直す。スライダーのinputイベントによる即時プレビュー
+    // (--pet-size更新)は保存ボタンを押すまで確定しないため、保存せずに設定画面を
+    // 離れて戻ってきた場合（renderPetCardの再呼び出し）は、ここで見た目も
+    // 保存済みの値へ巻き戻す（他のカードが再描画時にドラフト入力を捨てるのと同じ挙動）。
+    applyPetSizeVar(size);
+  }
+
+  $("pet-enabled-checkbox").addEventListener("change", function () {
+    var payload = { pet_enabled: $("pet-enabled-checkbox").checked };
+    window.pywebview.api.save_settings(payload).then(function (data) {
+      state.settings = data;
+      state.pet_enabled = data.pet_enabled !== false;
+      updatePetVisibility();
+      renderPetCard();
+      showToast("ペット表示の設定を保存した");
+    }).catch(function (err) {
+      showToast("保存に失敗した: " + err, "error");
+    });
+  });
+
+  // 大きさスライダー: inputイベント（ドラッグ中に連続発火）では見た目だけ即時反映し、
+  // 保存ボタンを押すまではconfigへ永続化しない（他の設定カードと同じ「編集は自由、
+  // 確定は保存ボタン」の考え方。ペットの位置(save_pet_pos)とは違い、サイズ変更
+  // そのものは確定操作ではないため）。
+  $("pet-character-select").addEventListener("change", function () {
+    var payload = { pet_character: $("pet-character-select").value };
+    window.pywebview.api.save_settings(payload).then(function (data) {
+      state.settings = data;
+      state.pet_character = data.pet_character || "konoha";
+      applyPetSkinForState(currentPetStateName());
+      renderPetCard();
+      showToast("ペットのキャラを切り替えた");
+    }).catch(function (err) {
+      showToast("保存に失敗した: " + err, "error");
+    });
+  });
+
+  $("pet-size-input").addEventListener("input", function () {
+    var size = parseInt($("pet-size-input").value, 10) || 64;
+    applyPetSizeVar(size);
+    $("pet-size-value").textContent = size + "px";
+  });
+
+  $("save-pet-size-btn").addEventListener("click", function () {
+    var payload = { pet_size: parseInt($("pet-size-input").value, 10) || 64 };
+    window.pywebview.api.save_settings(payload).then(function (data) {
+      state.settings = data;
+      renderPetCard();
+      applyPetSizeVar(data.pet_size || 64);
+      showToast("ペットの大きさを保存した");
+    }).catch(function (err) {
+      showToast("保存に失敗した: " + err, "error");
+    });
+  });
+
+  function renderThemeCard() {
+    if (!state.settings) return;
+    $("theme-select").value = state.settings.theme || "light";
+    $("streaming-enabled-checkbox").checked = state.settings.streaming !== false;
+  }
+
+  $("theme-select").addEventListener("change", function () {
+    var theme = $("theme-select").value;
+    applyTheme(theme);
+    window.pywebview.api.save_settings({ theme: theme }).then(function (data) {
+      state.settings = data;
+      state.theme = data.theme || "light";
+      applyTheme(state.theme);
+      renderThemeCard();
+      showToast("テーマを変更した");
+    }).catch(function (err) {
+      showToast("変更に失敗した: " + err, "error");
+    });
+  });
+
+  // FieriA拡張: ストリーミング表示のON/OFF（他のcheckbox系設定と同じ即時保存パターン）
+  $("streaming-enabled-checkbox").addEventListener("change", function () {
+    var payload = { streaming: $("streaming-enabled-checkbox").checked };
+    window.pywebview.api.save_settings(payload).then(function (data) {
+      state.settings = data;
+      renderThemeCard();
+      showToast("ストリーミング表示の設定を保存した");
+    }).catch(function (err) {
+      showToast("保存に失敗した: " + err, "error");
+    });
+  });
+
+  function renderProviderCard() {
+    if (!state.settings) return;
+    var llm = state.settings.llm || {};
+    var providers = llm.providers || {};
+    var labels = state.settings.provider_labels || {};
+    var select = $("provider-select");
+    select.innerHTML = "";
+    Object.keys(providers).forEach(function (name) {
+      var opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = labels[name] || name;
+      if (name === llm.provider) opt.selected = true;
+      select.appendChild(opt);
+    });
+    var current = providers[llm.provider] || {};
+    $("provider-model").value = current.model || "";
+    var isCustom = llm.provider === "custom";
+    $("provider-baseurl-row").style.display = isCustom ? "" : "none";
+    $("provider-baseurl").value = isCustom ? (current.base_url || "") : "";
+    var isUnlimited = llm.max_tokens === 0;
+    $("provider-maxtokens-unlimited").checked = isUnlimited;
+    $("provider-maxtokens").value = isUnlimited ? 2000 : (llm.max_tokens || 2000);
+    $("provider-maxtokens").disabled = isUnlimited;
+    var wrapupMaxTokens = state.settings.wrapup_max_tokens;
+    var isWrapupUnlimited = wrapupMaxTokens === 0;
+    $("wrapup-maxtokens-unlimited").checked = isWrapupUnlimited;
+    $("wrapup-maxtokens").value = isWrapupUnlimited ? 2000 : (wrapupMaxTokens || 2000);
+    $("wrapup-maxtokens").disabled = isWrapupUnlimited;
+    var contextLimitTokens = state.settings.context_limit_tokens;
+    var isContextUnlimited = !contextLimitTokens;
+    $("context-limit-tokens-unlimited").checked = isContextUnlimited;
+    $("context-limit-tokens").value = isContextUnlimited ? 2000 : (contextLimitTokens || 2000);
+    $("context-limit-tokens").disabled = isContextUnlimited;
+    renderFallbackSelect(providers, labels, llm.provider, llm.fallback_provider || "");
+    $("fallback-model").value = llm.fallback_model || "";
+    $("web-search-checkbox").checked = llm.web_search === true;
+    renderOauthCard(current.type);
+  }
+
+  // メインと同じプロバイダはフォールバック候補から除外する（llm.py側も同名なら無視するため）
+  function renderFallbackSelect(providers, labels, mainName, selectedFallback) {
+    var select = $("fallback-provider-select");
+    select.innerHTML = "";
+    var noneOpt = document.createElement("option");
+    noneOpt.value = "";
+    noneOpt.textContent = "なし";
+    select.appendChild(noneOpt);
+    Object.keys(providers).forEach(function (name) {
+      if (name === mainName) return;
+      var opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = labels[name] || name;
+      select.appendChild(opt);
+    });
+    // 直前の選択がメインと同名になった等で候補から消えていたら「なし」に戻す
+    var hasSelected = Array.prototype.some.call(select.options, function (o) { return o.value === selectedFallback; });
+    select.value = hasSelected ? selectedFallback : "";
+    if (!hasSelected) {
+      $("fallback-model").value = "";
+    }
+  }
+
+  $("provider-maxtokens-unlimited").addEventListener("change", function () {
+    $("provider-maxtokens").disabled = $("provider-maxtokens-unlimited").checked;
+  });
+
+  $("wrapup-maxtokens-unlimited").addEventListener("change", function () {
+    $("wrapup-maxtokens").disabled = $("wrapup-maxtokens-unlimited").checked;
+  });
+
+  $("context-limit-tokens-unlimited").addEventListener("change", function () {
+    $("context-limit-tokens").disabled = $("context-limit-tokens-unlimited").checked;
+  });
+
+  $("web-search-checkbox").addEventListener("change", function () {
+    var llm = JSON.parse(JSON.stringify(state.settings.llm || {}));
+    llm.web_search = $("web-search-checkbox").checked;
+    window.pywebview.api.save_settings({ llm: llm }).then(function (data) {
+      state.settings = data;
+      renderProviderCard();
+      showToast("Web検索の設定を保存した");
+    }).catch(function (err) {
+      showToast("保存に失敗した: " + err, "error");
+    });
+  });
+
+  $("provider-select").addEventListener("change", function () {
+    var name = $("provider-select").value;
+    var providers = (state.settings.llm || {}).providers || {};
+    var current = providers[name] || {};
+    $("provider-model").value = current.model || "";
+    var isCustom = name === "custom";
+    $("provider-baseurl-row").style.display = isCustom ? "" : "none";
+    $("provider-baseurl").value = isCustom ? (current.base_url || "") : "";
+    renderOauthCard(current.type);
+    $("model-list-box").style.display = "none";
+    $("model-list-box").innerHTML = "";
+    $("model-list-msg").textContent = "";
+    var labels = state.settings.provider_labels || {};
+    var selectedFallback = $("fallback-provider-select").value;
+    renderFallbackSelect(providers, labels, name, selectedFallback);
+  });
+
+  // ---------------- モデル一覧から選ぶ ----------------
+  $("list-models-btn").addEventListener("click", function () {
+    var name = $("provider-select").value;
+    var btn = $("list-models-btn");
+    var box = $("model-list-box");
+    var msg = $("model-list-msg");
+    box.style.display = "none";
+    box.innerHTML = "";
+    msg.textContent = "取得中…（数秒かかることがある）";
+    btn.disabled = true;
+    window.pywebview.api.list_models(name).then(function (res) {
+      btn.disabled = false;
+      if (!res.ok) {
+        msg.textContent = res.error || "取得に失敗した";
+        return;
+      }
+      if (!res.models || !res.models.length) {
+        msg.textContent = "モデルが見つからなかった";
+        return;
+      }
+      msg.textContent = "";
+      res.models.forEach(function (m) {
+        var item = document.createElement("div");
+        item.className = "model-item";
+        item.textContent = m;
+        item.addEventListener("click", function () {
+          $("provider-model").value = m;
+          box.style.display = "none";
+        });
+        box.appendChild(item);
+      });
+      box.style.display = "";
+    });
+  });
+
+  // ---------------- フォールバック先のモデル一覧から選ぶ ----------------
+  $("list-fallback-models-btn").addEventListener("click", function () {
+    var name = $("fallback-provider-select").value;
+    var btn = $("list-fallback-models-btn");
+    var box = $("fallback-model-list-box");
+    var msg = $("fallback-model-list-msg");
+    box.style.display = "none";
+    box.innerHTML = "";
+    if (!name) {
+      msg.textContent = "フォールバック先を選んでください";
+      return;
+    }
+    msg.textContent = "取得中…（数秒かかることがある）";
+    btn.disabled = true;
+    window.pywebview.api.list_models(name).then(function (res) {
+      btn.disabled = false;
+      if (!res.ok) {
+        msg.textContent = res.error || "取得に失敗した";
+        return;
+      }
+      if (!res.models || !res.models.length) {
+        msg.textContent = "モデルが見つからなかった";
+        return;
+      }
+      msg.textContent = "";
+      res.models.forEach(function (m) {
+        var item = document.createElement("div");
+        item.className = "model-item";
+        item.textContent = m;
+        item.addEventListener("click", function () {
+          $("fallback-model").value = m;
+          box.style.display = "none";
+        });
+        box.appendChild(item);
+      });
+      box.style.display = "";
+    });
+  });
+
+  // ---------------- OAuthログイン（Grok / ChatGPT） ----------------
+  function renderOauthCard(ptype) {
+    var isXai = ptype === "xai_oauth";
+    var isCodex = ptype === "openai_codex_oauth";
+    $("oauth-card").style.display = (isXai || isCodex) ? "" : "none";
+    $("oauth-row-xai").style.display = isXai ? "" : "none";
+    $("oauth-row-codex").style.display = isCodex ? "" : "none";
+    if (isXai) refreshXaiStatus();
+    if (isCodex) refreshCodexStatus();
+  }
+
+  function setXaiBadge(loggedIn) {
+    var b = $("xai-oauth-badge");
+    b.textContent = loggedIn ? "ログイン済み ✓" : "未ログイン";
+    b.className = "badge " + (loggedIn ? "set" : "unset");
+  }
+  function refreshXaiStatus() {
+    window.pywebview.api.xai_login_status().then(function (st) {
+      setXaiBadge(!!st.logged_in);
+    });
+  }
+  var xaiPollTimer = null;
+  var codexPollTimer = null;
+  // 設定ビューを離れたとき／ログイン完了時にOAuthステータスの定期ポーリングを止める共通処理
+  function stopOauthPolling() {
+    clearInterval(xaiPollTimer);
+    xaiPollTimer = null;
+    clearInterval(codexPollTimer);
+    codexPollTimer = null;
+  }
+  function xaiLoginDone() {
+    stopOauthPolling();
+    setXaiBadge(true);
+    $("xai-code-input").value = "";
+    $("xai-oauth-msg").textContent = "ログインした！";
+  }
+  $("xai-login-btn").addEventListener("click", function () {
+    window.pywebview.api.xai_login_start().then(function (res) {
+      if (!res.ok) { $("xai-oauth-msg").textContent = "ログイン開始失敗: " + res.error; return; }
+      $("xai-oauth-msg").textContent = "ブラウザでログインして許可してください（3分以内）";
+      clearInterval(xaiPollTimer);
+      var polls = 0;
+      xaiPollTimer = setInterval(function () {
+        polls += 1;
+        if (polls > 200) { clearInterval(xaiPollTimer); xaiPollTimer = null; return; } // 5分で打ち切り
+        window.pywebview.api.xai_login_status().then(function (st) {
+          if (st.status === "ok") {
+            xaiLoginDone();
+          } else if (st.status && st.status.indexOf("error") === 0) {
+            clearInterval(xaiPollTimer);
+            xaiPollTimer = null;
+            $("xai-oauth-msg").textContent = "ログイン失敗: " + st.status;
+          }
+        });
+      }, 1500);
+    });
+  });
+  $("xai-code-submit-btn").addEventListener("click", function () {
+    var pasted = $("xai-code-input").value.trim();
+    if (!pasted) { $("xai-oauth-msg").textContent = "コードを貼ってください"; return; }
+    window.pywebview.api.xai_submit_code(pasted).then(function (res) {
+      if (res.ok) xaiLoginDone();
+      else $("xai-oauth-msg").textContent = "ログイン失敗: " + res.error;
+    });
+  });
+  $("xai-logout-btn").addEventListener("click", function () {
+    window.pywebview.api.xai_logout().then(function () {
+      setXaiBadge(false);
+      $("xai-oauth-msg").textContent = "ログアウトした";
+    });
+  });
+
+  function setCodexBadge(loggedIn) {
+    var b = $("codex-oauth-badge");
+    b.textContent = loggedIn ? "ログイン済み ✓" : "未ログイン";
+    b.className = "badge " + (loggedIn ? "set" : "unset");
+  }
+  function refreshCodexStatus() {
+    window.pywebview.api.codex_login_status().then(function (st) {
+      setCodexBadge(!!st.logged_in);
+    });
+  }
+  function codexLoginDone() {
+    stopOauthPolling();
+    setCodexBadge(true);
+    $("codex-code-input").value = "";
+    $("codex-oauth-msg").textContent = "ログインした！";
+  }
+  $("codex-login-btn").addEventListener("click", function () {
+    window.pywebview.api.codex_login_start().then(function (res) {
+      if (!res.ok) { $("codex-oauth-msg").textContent = "ログイン開始失敗: " + res.error; return; }
+      $("codex-oauth-msg").textContent = "ブラウザでログインして許可してください（3分以内）";
+      clearInterval(codexPollTimer);
+      var polls = 0;
+      codexPollTimer = setInterval(function () {
+        polls += 1;
+        if (polls > 200) { clearInterval(codexPollTimer); codexPollTimer = null; return; } // 5分で打ち切り
+        window.pywebview.api.codex_login_status().then(function (st) {
+          if (st.status === "ok") {
+            codexLoginDone();
+          } else if (st.status && st.status.indexOf("error") === 0) {
+            clearInterval(codexPollTimer);
+            codexPollTimer = null;
+            $("codex-oauth-msg").textContent = "ログイン失敗: " + st.status;
+          }
+        });
+      }, 1500);
+    });
+  });
+  $("codex-code-submit-btn").addEventListener("click", function () {
+    var pasted = $("codex-code-input").value.trim();
+    if (!pasted) { $("codex-oauth-msg").textContent = "コードが空です"; return; }
+    window.pywebview.api.codex_submit_code(pasted).then(function (res) {
+      if (res.ok) codexLoginDone();
+      else $("codex-oauth-msg").textContent = "確定失敗: " + res.error;
+    });
+  });
+  $("codex-logout-btn").addEventListener("click", function () {
+    window.pywebview.api.codex_logout().then(function () {
+      setCodexBadge(false);
+      $("codex-oauth-msg").textContent = "ログアウトした";
+    });
+  });
+
+  $("save-provider-btn").addEventListener("click", function () {
+    var llm = JSON.parse(JSON.stringify(state.settings.llm || {}));
+    var name = $("provider-select").value;
+    llm.provider = name;
+    llm.providers = llm.providers || {};
+    llm.providers[name] = llm.providers[name] || {};
+    llm.providers[name].model = $("provider-model").value;
+    if (name === "custom") {
+      llm.providers[name].base_url = $("provider-baseurl").value;
+    }
+    llm.fallback_provider = $("fallback-provider-select").value;
+    llm.fallback_model = $("fallback-model").value.trim();
+    if ($("provider-maxtokens-unlimited").checked) {
+      llm.max_tokens = 0;
+    } else {
+      var maxTokens = parseInt($("provider-maxtokens").value, 10);
+      if (isNaN(maxTokens) || maxTokens < 256) {
+        maxTokens = 256;
+      }
+      llm.max_tokens = maxTokens;
+    }
+    var wrapupMaxTokens;
+    if ($("wrapup-maxtokens-unlimited").checked) {
+      wrapupMaxTokens = 0;
+    } else {
+      wrapupMaxTokens = parseInt($("wrapup-maxtokens").value, 10);
+      if (isNaN(wrapupMaxTokens) || wrapupMaxTokens < 256) {
+        wrapupMaxTokens = 256;
+      }
+    }
+    var contextLimitTokens;
+    if ($("context-limit-tokens-unlimited").checked) {
+      contextLimitTokens = 0;
+    } else {
+      contextLimitTokens = parseInt($("context-limit-tokens").value, 10);
+      if (isNaN(contextLimitTokens) || contextLimitTokens < 256) {
+        contextLimitTokens = 256;
+      }
+    }
+    window.pywebview.api.save_settings({
+      llm: llm, wrapup_max_tokens: wrapupMaxTokens, context_limit_tokens: contextLimitTokens,
+    }).then(function (data) {
+      state.settings = data;
+      renderProviderCard();
+      showToast("プロバイダ設定を保存した");
+    }).catch(function (err) {
+      showToast("保存に失敗した: " + err, "error");
+    });
+  });
+
+  function renderApiKeyList() {
+    window.pywebview.api.list_api_keys().then(function (keys) {
+      var box = $("apikey-list");
+      box.innerHTML = "";
+      keys.forEach(function (k) {
+        var row = document.createElement("div");
+        row.className = "list-item apikey-row";
+
+        var info = document.createElement("div");
+        info.className = "apikey-info";
+        var name = document.createElement("span");
+        name.className = "name";
+        name.textContent = k.provider;
+        var envLabel = document.createElement("span");
+        envLabel.className = "hint";
+        envLabel.style.marginTop = "0";
+        envLabel.textContent = k.env_key;
+        info.appendChild(name);
+        info.appendChild(envLabel);
+        row.appendChild(info);
+
+        var badge = document.createElement("span");
+        badge.className = "badge " + (k.is_set ? "set" : "unset");
+        badge.textContent = k.is_set ? "設定済み ✓" : "未設定";
+        row.appendChild(badge);
+
+        var input = document.createElement("input");
+        input.type = "password";
+        input.placeholder = "APIキーを入力";
+        row.appendChild(input);
+
+        var btns = document.createElement("div");
+        btns.className = "btns";
+
+        var saveBtn = document.createElement("button");
+        saveBtn.textContent = "保存";
+        saveBtn.addEventListener("click", function () {
+          var val = input.value.trim();
+          if (!val) return;
+          window.pywebview.api.save_api_key(k.env_key, val).then(function () {
+            input.value = "";
+            renderApiKeyList();
+            showToast(k.provider + "のAPIキーを保存した");
+          }).catch(function (err) {
+            showToast("保存に失敗した: " + err, "error");
+          });
+        });
+        btns.appendChild(saveBtn);
+
+        if (k.is_set) {
+          var delBtn = document.createElement("button");
+          delBtn.className = "ghost";
+          delBtn.textContent = "削除";
+          delBtn.addEventListener("click", function () {
+            window.pywebview.api.delete_api_key(k.env_key).then(function () {
+              renderApiKeyList();
+              showToast(k.provider + "のAPIキーを削除した");
+            }).catch(function (err) {
+              showToast("削除に失敗した: " + err, "error");
+            });
+          });
+          btns.appendChild(delBtn);
+        }
+        row.appendChild(btns);
+
+        box.appendChild(row);
+      });
+    });
+  }
+
+  $("backup-btn").addEventListener("click", function () {
+    var result = $("backup-result");
+    result.textContent = "バックアップ中...";
+    window.pywebview.api.backup_souls().then(function (data) {
+      if (data.ok) {
+        result.textContent = "保存した: " + data.path + " (" + data.size_mb + " MB)";
+        showToast("バックアップを作った");
+      } else {
+        result.textContent = "失敗: " + data.error;
+        showToast(data.error || "バックアップに失敗した", "error");
+      }
+    });
+  });
+
+  var restoring = false;
+  $("restore-btn").addEventListener("click", function () {
+    if (restoring) return;
+    restoring = true;
+    $("restore-btn").disabled = true;
+    var result = $("restore-result");
+    window.pywebview.api.pick_backup_file().then(function (path) {
+      if (!path) {  // キャンセル
+        restoring = false;
+        $("restore-btn").disabled = false;
+        return;
+      }
+      var ok = window.confirm(
+        "現在の状態を自動バックアップしてから、選んだzipの内容で復元します。よろしいですか？\n\n" + path
+      );
+      if (!ok) {
+        restoring = false;
+        $("restore-btn").disabled = false;
+        return;
+      }
+      result.textContent = "復元中...";
+      window.pywebview.api.import_backup(path).then(function (data) {
+        restoring = false;
+        $("restore-btn").disabled = false;
+        if (data.ok) {
+          result.textContent = "復元した: " + (data.restored_souls.length
+            ? data.restored_souls.join("、")
+            : "（該当SOULなし）");
+          if (data.overwritten_souls && data.overwritten_souls.length) {
+            var overwrittenNames = data.overwritten_souls.map(function (s) {
+              return s.name;
+            }).join("、");
+            result.textContent += "\n既存SOUL「" + overwrittenNames + "」に上書きマージした";
+          }
+          applyBoot(data);
+          renderSoulList();
+          showToast("バックアップから復元した");
+        } else {
+          result.textContent = "失敗: " + data.error;
+          showToast(data.error || "復元に失敗した", "error");
+        }
+      });
+    });
+  });
+
+  function loadSettings() {
+    window.pywebview.api.get_settings().then(function (data) {
+      state.settings = data;
+      renderSoulList();
+      renderRoleList();
+      renderFactLayer();
+      renderWorkspaceCard();
+      renderAutoRoleSwitch();
+      renderAutoRecallCard();
+      renderPetCard();
+      renderThemeCard();
+      renderProviderCard();
+      renderApiKeyList();
+    });
+    renderScheduledJobs();
+  }
+
+  function renderScheduledJobs() {
+    var box = $("scheduler-list");
+    box.innerHTML = "";
+    window.pywebview.api.get_scheduled_jobs().then(function (jobs) {
+      box.innerHTML = "";
+      jobs.forEach(function (job) {
+        var row = document.createElement("div");
+        row.className = "row";
+        row.style.flexDirection = "column";
+        row.style.alignItems = "flex-start";
+        var toggleRow = document.createElement("div");
+        toggleRow.className = "toggle-row";
+        var checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = !!job.enabled;
+        checkbox.addEventListener("change", function () {
+          var turnedOn = checkbox.checked;
+          window.pywebview.api.set_scheduled_job(job.id, turnedOn).then(function () {
+            renderScheduledJobs();
+            showToast(job.name + "を" + (turnedOn ? "有効" : "無効") + "にした");
+          }).catch(function (err) {
+            showToast("切替に失敗した: " + err, "error");
+          });
+        });
+        var title = document.createElement("label");
+        title.textContent = job.name;
+        title.style.fontWeight = "bold";
+        title.style.minWidth = "auto";
+        toggleRow.appendChild(checkbox);
+        toggleRow.appendChild(title);
+        var desc = document.createElement("div");
+        desc.className = "hint";
+        desc.textContent = job.description;
+        var last = document.createElement("div");
+        last.className = "hint";
+        last.textContent = job.last_run
+          ? "最終実行: " + job.last_run + "（" + (job.last_result.length
+              ? job.last_result.join(", ") + " を作成" : "対象なし") + "）"
+          : "まだ未実行";
+        row.appendChild(toggleRow);
+        row.appendChild(desc);
+        row.appendChild(last);
+        box.appendChild(row);
+      });
+    });
+  }
+
+  window.addEventListener("pywebviewready", boot);
+})();
+</script>
