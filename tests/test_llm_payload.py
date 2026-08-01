@@ -187,3 +187,45 @@ def test_entry_explicit_empty_effort_overrides_global():
                         "model": "m", "env_key": "K", "reasoning_effort": ""}}}
     inst = llm.create_llm(cfg, {"K": "dummy"})
     assert inst.reasoning_effort == ""
+
+
+# --- 画像添付のpayload配線（OpenAI互換は既存の正常系を固定化、Codexは新規実装の検証） ---
+
+def test_openai_compat_chat_sends_image_url_for_images(monkeypatch):
+    """既存挙動（_to_openai_msg）の固定化。imagesが image_url 形式でpayloadに載る。"""
+    captured = {"response": {"choices": [{"message": {"content": "ok"}}]}}
+    _capture_post(monkeypatch, captured)
+    provider = llm.OpenAICompatLLM(_openai_entry(), api_key="k", temperature=0.8, max_tokens=2000)
+    provider.chat([{"role": "user", "content": "この画像なに",
+                     "images": [{"mime": "image/png", "b64": "AAA"}]}])
+    msg = captured["payload"]["messages"][0]
+    assert msg["role"] == "user"
+    assert msg["content"] == [
+        {"type": "text", "text": "この画像なに"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}},
+    ]
+
+
+def test_codex_chat_sends_input_image_for_images(monkeypatch):
+    """CodexOAuthLLM.chatがimages付きメッセージをResponses APIのinput_text/input_image形式へ変換する。"""
+    captured = {"raw": _codex_sse_ok()}
+    _capture_post_sse(monkeypatch, captured)
+    provider = llm.CodexOAuthLLM({"model": "gpt-5.5"}, temperature=0.8, max_tokens=2000)
+    provider.chat([{"role": "user", "content": "この画像なに",
+                     "images": [{"mime": "image/png", "b64": "AAA"}]}])
+    msg = captured["payload"]["input"][0]
+    assert msg["role"] == "user"
+    assert msg["content"] == [
+        {"type": "input_text", "text": "この画像なに"},
+        {"type": "input_image", "image_url": "data:image/png;base64,AAA"},
+    ]
+
+
+def test_codex_chat_keeps_string_content_when_no_images(monkeypatch):
+    """リグレッション確認: imagesなしメッセージは従来どおり文字列contentのまま。"""
+    captured = {"raw": _codex_sse_ok()}
+    _capture_post_sse(monkeypatch, captured)
+    provider = llm.CodexOAuthLLM({"model": "gpt-5.5"}, temperature=0.8, max_tokens=2000)
+    provider.chat([{"role": "user", "content": "hi"}])
+    msg = captured["payload"]["input"][0]
+    assert msg == {"role": "user", "content": "hi"}

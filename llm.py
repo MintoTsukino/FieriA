@@ -603,6 +603,21 @@ def _extract_sse_delta_text(raw_text):
     return "".join(chunks).strip()
 
 
+def _to_codex_input_msg(m):
+    """内部メッセージ形式 → Responses API の input 要素形式。imagesがあれば
+    input_text/input_image のマルチモーダルcontentにする（Chat Completions系の
+    _to_openai_msgとはタイプ名・image_urlの形が違う——Responses APIはタイプ名が
+    input_text/input_image で、image_urlは文字列を直付けする）。"""
+    images = m.get("images")
+    if not images:
+        return {"role": m["role"], "content": m["content"]}
+    content = [{"type": "input_text", "text": m["content"]}]
+    for img in images:
+        content.append({"type": "input_image",
+                         "image_url": f"data:{img['mime']};base64,{img['b64']}"})
+    return {"role": m["role"], "content": content}
+
+
 class CodexOAuthLLM(_ChatStreamFallbackMixin):
     """ChatGPT Plus/ProのサブスクをOAuth経由で使うプロバイダ。OpenAI公式のResponses API
     （常にSSEで返る）を使う。OpenAICompatLLMは継承しない——リクエスト/レスポンス形式が
@@ -679,7 +694,7 @@ class CodexOAuthLLM(_ChatStreamFallbackMixin):
             "store": False,
             "stream": True,
             "input": [
-                {"role": m["role"], "content": m["content"]}
+                _to_codex_input_msg(m)
                 for m in messages if m["role"] != "system"
             ],
         }
