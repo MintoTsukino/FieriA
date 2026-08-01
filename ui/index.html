@@ -488,6 +488,8 @@
   #side { border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
   #side-scroll { flex: 1; overflow-y: auto; min-height: 0; padding: 20px; }
   #side h4 { font-size: 13px; color: var(--fg-dim); margin: 0 0 10px 0; font-weight: normal; }
+  #diary-title { font-size: 13px; color: var(--fg-dim); font-weight: normal; margin: 0 0 10px 0; cursor: pointer; }
+  #diary-title:hover { color: var(--fg); }
   #side .card { padding: 14px; }
   #diary-body { white-space: pre-wrap; line-height: 1.7; font-size: 13px; }
   #diary-body.empty { color: var(--fg-dim); }
@@ -919,13 +921,15 @@
   <!-- 右パネル -->
   <div id="side">
     <div id="side-scroll">
-      <h4 id="diary-title">日記</h4>
-      <div class="card"><div id="diary-body" class="empty">まだ書かれてない</div></div>
+      <details id="diary-group" open>
+        <summary id="diary-title">日記</summary>
+        <div class="card"><div id="diary-body" class="empty">まだ書かれてない</div></div>
+      </details>
       <h4>記憶ファイル</h4>
       <div class="card" id="side-files"></div>
     </div>
     <div id="side-model-bar">
-      <button id="model-current" title="モデル・推論エフォートを切り替える">（未設定）</button>
+      <button id="model-current" title="（未設定）｜クリックで切り替え">モデル</button>
       <div id="model-menu"></div>
     </div>
   </div>
@@ -2065,8 +2069,9 @@ function renderMarkdownToHtml(raw) {
   // boot()のllm_summary（{provider,label,model,reasoning_effort}）から表示を更新する。
   // llm_summary自体が無い/空文字だらけでも modelLabelText 側でフォールバックするため壊れない。
   function applyModelSummary(summary) {
-    $("model-current").textContent = modelLabelText(
-      summary && summary.label, summary && summary.model, summary && summary.reasoning_effort);
+    $("model-current").textContent = "モデル";
+    $("model-current").title = modelLabelText(
+      summary && summary.label, summary && summary.model, summary && summary.reasoning_effort) + "｜クリックで切り替え";
   }
 
   // get_settings()/save_settings()の戻り値（{llm, provider_labels, ...}）形式から表示を更新する。
