@@ -827,7 +827,11 @@ class Bridge:
         # ファイルI/O（list_inbox）はロックの外で済ませてある。is_llm_busy()は
         # 内部で同じロックを取るため、ここでは_busy_turnsを直接見る（再入不可のLock）。
         with self._busy_lock:
-            if self._busy_turns > 0:
+            # スケジューラの定期ジョブも同じsoulの記憶へLLM経由で書くため、
+            # チャット中と同様にインポート開始を拒否する。is_running_jobは
+            # scheduler側の別ロック（_running_lock）なので_busy_lock内から
+            # 呼んでもデッドロックしない。
+            if self._busy_turns > 0 or self._scheduler.is_running_job():
                 return {"error": "会話の処理中はインポートできない"}
             if self._importing:
                 return {"error": "すでにインポート処理中"}

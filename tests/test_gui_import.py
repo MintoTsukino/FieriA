@@ -136,3 +136,13 @@ def test_send_message_rechecks_importing_under_lock(monkeypatch):
     assert "error" in out and "インポート処理中" in out["error"]
     assert b._busy_turns == 0
     b._importing = False
+
+
+def test_start_import_refuses_while_scheduler_job_running(tmp_path, monkeypatch):
+    b, sid = _bridge_with_soul("スケジューラ排他試験")
+    (tmp_path / "s.md").write_text("S", encoding="utf-8")
+    importer.stage_files(sid, [str(tmp_path / "s.md")])
+    monkeypatch.setattr(b._scheduler, "is_running_job", lambda: True)
+    out = b.start_import()
+    assert out == {"error": "会話の処理中はインポートできない"}
+    assert b._importing is False
