@@ -197,6 +197,8 @@ class Bridge:
         }
 
     def send_message(self, text, images=None):
+        if self._importing:
+            return {"error": "インポート処理中は会話できない（完了かキャンセルを待って）"}
         if not self._engine:
             return {"error": "SOULが未作成。設定からSOULを作ってください"}
         oversized = _oversized_pdf_error(images)
@@ -807,6 +809,53 @@ class Bridge:
         out = importer.stage_files(soul_id, paths)
         out["inbox_count"] = len(importer.list_inbox(soul_id))
         return out
+
+    def start_import(self):
+        """インポートのバッチ実行を開始する。実処理はデーモンスレッドで走る。"""
+        soul_id = self._cfg.get("active_soul")
+        if not soul_id:
+            return {"error": "SOULが選ばれていない"}
+        if self.is_llm_busy():
+            return {"error": "会話の処理中はインポートできない"}
+        if self._importing:
+            return {"error": "すでにインポート処理中"}
+        files = importer.list_inbox(soul_id)
+        if not files:
+            return {"error": "inboxが空。先にファイルを追加して"}
+        self._importing = True
+        self._import_stop = False
+        threading.Thread(target=self._run_import_thread,
+                         args=(soul_id,), daemon=True).start()
+        return {"ok": True, "total": len(files)}
+
+    def cancel_import(self):
+        """次のファイル境界で停止する（処理中のLLM呼び出しは中断しない）。"""
+        self._import_stop = True
+        return {"ok": True}
+
+    def _run_import_thread(self, soul_id):
+        try:
+            summary = importer.run_import(
+                self._cfg, self._llm, soul_id,
+                on_progress=self._push_import_progress,
+                should_stop=lambda: self._import_stop)
+            self._push_import_progress(dict(summary, kind="done"))
+        except Exception as e:
+            self._push_import_progress({
+                "kind": "done", "total": 0, "done": 0, "stopped": False,
+                "failed": [{"file": "(内部エラー)", "detail": str(e)}]})
+        finally:
+            self._importing = False
+
+    def _push_import_progress(self, payload):
+        w = self._window
+        if not w:
+            return
+        try:
+            w.evaluate_js("window.onImportProgress && window.onImportProgress("
+                          + json.dumps(payload, ensure_ascii=False) + ")")
+        except Exception:
+            pass
 
     def pick_and_stage_import_files(self):
         """MDファイルを複数選択してinboxへコピー。（ネイティブダイアログ呼び出しのためテスト対象外）"""
