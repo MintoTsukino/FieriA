@@ -176,6 +176,22 @@ class Bridge:
             if restore_turns:
                 self._engine.restore_today(restore_turns)
 
+    def _llm_summary(self):
+        """現在のLLMプロバイダ/モデル/推論エフォートのサマリー（画面ヘッダー表示用）。
+        providerがproviders configに存在しない等の異常時も例外にせず空文字で埋めて返す。"""
+        empty = {"provider": "", "label": "", "model": "", "reasoning_effort": ""}
+        llm_cfg = self._cfg.get("llm", {})
+        provider = llm_cfg.get("provider", "")
+        entry = llm_cfg.get("providers", {}).get(provider)
+        if not provider or not entry:
+            return empty
+        return {
+            "provider": provider,
+            "label": config_mod.PROVIDER_LABELS.get(provider, provider),
+            "model": entry.get("model", ""),
+            "reasoning_effort": entry.get("reasoning_effort", ""),
+        }
+
     # --- 起動・会話 ---
     def boot(self):
         active_soul = self._cfg.get("active_soul")
@@ -194,6 +210,7 @@ class Bridge:
             # LLMへ渡す会話コンテキストは増やさない（設計判断: 今日の発言量が多いほど
             # APIコストが増えるトレードオフを許容するかは未確定のため、画面表示のみに留める）。
             "today_log": soul_mod.read_today_log(active_soul) if active_soul else [],
+            "llm_summary": self._llm_summary(),
         }
 
     def send_message(self, text, images=None):
