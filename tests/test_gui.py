@@ -1430,3 +1430,31 @@ def test_save_settings_normalizes_reasoning_effort():
     assert provs["ollama"]["reasoning_effort"] == "high"
     assert provs["gemini"]["reasoning_effort"] == ""
     assert provs["groq"]["reasoning_effort"] == ""
+
+
+# --- メイン画面QOL Task 1: boot()にllm_summaryを追加 ---
+# 2026-08-02追加。画面ヘッダーに現在のプロバイダ/モデル/推論エフォートを常時
+# 表示するためのサマリー。異常な設定（存在しないprovider等）でも例外にせず
+# 空文字で埋めたdictを返す（gui.py _llm_summary参照）。
+
+
+def test_boot_includes_llm_summary():
+    import gui
+    b = gui.Bridge()
+    b._cfg["llm"]["provider"] = "gemini"
+    b._cfg["llm"]["providers"]["gemini"]["reasoning_effort"] = "high"
+    data = b.boot()
+    s = data["llm_summary"]
+    assert s["provider"] == "gemini"
+    assert s["model"] == b._cfg["llm"]["providers"]["gemini"]["model"]
+    assert s["reasoning_effort"] == "high"
+    assert s["label"]  # 空でない表示名
+
+
+def test_boot_llm_summary_safe_on_broken_config():
+    import gui
+    b = gui.Bridge()
+    b._cfg["llm"]["provider"] = "存在しないやつ"
+    data = b.boot()
+    assert data["llm_summary"] == {"provider": "", "label": "", "model": "",
+                                   "reasoning_effort": ""}
