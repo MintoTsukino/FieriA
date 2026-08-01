@@ -21,7 +21,7 @@ import soul as soul_mod
 import wrapup as wrapup_mod
 from engine import Engine
 from env import delete_key, load_env, set_key
-from llm import build_provider, create_llm
+from llm import REASONING_EFFORTS, build_provider, create_llm
 from scheduler import JOBS, Scheduler
 
 
@@ -456,6 +456,11 @@ class Bridge:
             # FieriA拡張: Web検索。llm全体をJSから丸ごと差し替える既存パターンに乗るが、
             # 型はJS側の保証に委ねず（auto_role_switch等と同様）ここで確定させる。
             self._cfg["llm"]["web_search"] = bool(self._cfg["llm"].get("web_search", False))
+            # 推論エフォート: プロバイダentryごと。GUI/JS由来の値をここで確定させる
+            for entry in self._cfg["llm"].get("providers", {}).values():
+                if isinstance(entry, dict):
+                    val = str(entry.get("reasoning_effort", "") or "").strip().lower()
+                    entry["reasoning_effort"] = val if val in REASONING_EFFORTS else ""
         if "theme" in payload:
             self._cfg["theme"] = payload["theme"]
         if "wrapup_max_tokens" in payload:
