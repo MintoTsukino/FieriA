@@ -28,18 +28,33 @@
     grid-template-columns: 200px 1fr 320px;
     height: 100vh;
   }
+  #app.side-collapsed { grid-template-columns: 200px 1fr; }
+  #app.side-collapsed #side { display: none; }
   /* --- 左ナビ --- */
   #nav {
     background: var(--bg2);
     border-right: 1px solid var(--line);
     padding: 20px 14px;
     display: flex; flex-direction: column; gap: 8px;
+    position: relative;
   }
   #nav .soul-name {
     font-size: 13px; color: var(--fg-dim);
     padding: 0 4px 14px 4px; border-bottom: 1px solid var(--line);
     margin-bottom: 6px; word-break: break-all;
+    cursor: pointer;
   }
+  #nav .soul-name:hover:not(.disabled) { color: var(--fg); }
+  #nav .soul-name.disabled { cursor: default; opacity: .5; }
+  #soul-menu {
+    position: absolute; top: 60px; left: 14px; right: 14px; z-index: 10;
+    background: var(--bg); border: 1px solid var(--line);
+    border-radius: var(--card-radius); box-shadow: var(--shadow);
+    padding: 6px; display: none;
+  }
+  #soul-menu.open { display: block; }
+  #soul-menu .item.active-tag { cursor: default; color: var(--fg-dim); }
+  #soul-menu .item.active-tag:hover { background: none; }
   .nav-btn {
     background: none; border: none; text-align: left;
     padding: 10px 12px; border-radius: var(--card-radius);
@@ -70,21 +85,22 @@
     min-width: 200px; padding: 6px; display: none;
   }
   #role-menu.open { display: block; }
-  #role-menu .item {
+  #role-menu .item, #soul-menu .item {
     padding: 10px 12px; border-radius: 10px; cursor: pointer; font-size: 14px;
   }
-  #role-menu .item:hover { background: var(--bg2); }
+  #role-menu .item:hover, #soul-menu .item:hover { background: var(--bg2); }
   #role-menu .item.sep { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 12px; color: var(--fg-dim); }
 
   /* 「区切り」ボタン: role-current(ロール選択)より控えめな見た目にして、
      普段の操作導線としては地味に置く（頻繁に押すボタンではないため）。 */
-  #break-btn {
-    margin-left: auto; background: transparent; border: 1px solid var(--line);
+  #break-btn, #side-toggle-btn {
+    background: transparent; border: 1px solid var(--line);
     color: var(--fg-dim); border-radius: var(--card-radius); padding: 6px 14px;
     cursor: pointer; font-size: 13px;
   }
-  #break-btn:hover:not(:disabled) { background: var(--bg2); color: var(--fg); }
-  #break-btn:disabled { opacity: .5; cursor: default; }
+  #break-btn { margin-left: auto; }
+  #break-btn:hover:not(:disabled), #side-toggle-btn:hover:not(:disabled) { background: var(--bg2); color: var(--fg); }
+  #break-btn:disabled, #side-toggle-btn:disabled { opacity: .5; cursor: default; }
 
   #chat-log {
     flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 18px;
@@ -527,6 +543,7 @@
 <div id="app">
   <nav id="nav">
     <div class="soul-name" id="soul-name-label">SOUL未選択</div>
+    <div id="soul-menu"></div>
     <button class="nav-btn active" data-view="chat">チャット</button>
     <button class="nav-btn" data-view="memory">記憶</button>
     <button class="nav-btn" data-view="logs">ログ</button>
@@ -541,6 +558,7 @@
         <button id="role-current">（未設定）</button>
         <div id="role-menu"></div>
         <button id="break-btn" title="ここまでの文脈をリセットする（会話はログに残る）">区切り</button>
+        <button id="side-toggle-btn" title="日記パネルの表示を切り替える">日記▸</button>
       </div>
       <div id="chat-log"></div>
       <div id="pet-widget" class="pet-idle pet-hidden" aria-hidden="true" title="コノハ">
@@ -1144,6 +1162,7 @@ function renderMarkdownToHtml(raw) {
 
     var soulObj = state.souls.find(function (s) { return s.id === state.active_soul; });
     $("soul-name-label").textContent = soulObj ? soulObj.name : "SOUL未選択";
+    renderSoulMenu();
 
     updateBootGuard();
 
@@ -1782,6 +1801,10 @@ function renderMarkdownToHtml(raw) {
     for (var i = 0; i < swBtns.length; i++) swBtns[i].disabled = sending;
     var createBtn = $("create-soul-btn");
     if (createBtn) createBtn.disabled = sending && !editingSoulId;
+    // #soul-name-labelはbuttonでないため、disabled属性の代わりにdisabledクラス
+    // （見た目）＋クリックハンドラ内のsendingチェック（実効の無効化）で弾く。
+    $("soul-name-label").classList.toggle("disabled", sending);
+    if (sending) $("soul-menu").classList.remove("open");
   }
 
   function addOperations(afterRow, operations, openByDefault) {
@@ -1976,6 +1999,54 @@ function renderMarkdownToHtml(raw) {
     $("role-menu").classList.toggle("open");
   });
   document.addEventListener("click", function () { $("role-menu").classList.remove("open"); });
+
+  // --- SOUL切替（ナビの#soul-name-label） ---
+  function renderSoulMenu() {
+    var menu = $("soul-menu");
+    menu.innerHTML = "";
+    state.souls.forEach(function (s) {
+      var isActive = s.id === state.active_soul;
+      var item = document.createElement("div");
+      item.className = "item" + (isActive ? " active-tag" : "");
+      item.textContent = s.name + (isActive ? " ・使用中" : "");
+      if (!isActive) {
+        item.addEventListener("click", function () {
+          if (sending) return;
+          identityRequestSeq++;  // 編集応答待ちがあれば無効化（レースガード。設定画面のswitchボタンと同じ考え方）
+          menu.classList.remove("open");
+          window.pywebview.api.switch_soul(s.id).then(function (data) {
+            applyBoot(data);
+            renderSoulList();
+            if (data && data.error) {
+              showToast(data.error, "error");
+            } else {
+              showToast("SOULを切り替えた");
+            }
+          }).catch(function (err) {
+            showToast("切り替えに失敗した: " + err, "error");
+          });
+        });
+      }
+      menu.appendChild(item);
+    });
+  }
+
+  $("soul-name-label").addEventListener("click", function (e) {
+    e.stopPropagation();
+    if (sending) return;
+    var menu = $("soul-menu");
+    // 開く直前に作り直す：rename等（switch_soulを経由しない変更）で名前が変わっていても
+    // 次に開いたときは最新のstate.soulsを反映する。
+    if (!menu.classList.contains("open")) renderSoulMenu();
+    menu.classList.toggle("open");
+  });
+  document.addEventListener("click", function () { $("soul-menu").classList.remove("open"); });
+
+  // --- 日記パネル開閉 ---
+  $("side-toggle-btn").addEventListener("click", function () {
+    var collapsed = $("app").classList.toggle("side-collapsed");
+    $("side-toggle-btn").textContent = collapsed ? "◂日記" : "日記▸";
+  });
 
   // --- 記憶ビュー ---
   function loadMemoryTree() {
