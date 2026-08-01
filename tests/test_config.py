@@ -124,6 +124,40 @@ def test_load_config_preserves_existing_streaming_false():
     assert reloaded["streaming"] is False
 
 
+# --- FieriA拡張: 入力欄フォーカス時のIME自動切替（日本語モード）設定 ---
+
+def test_default_ime_auto_ja_is_true():
+    config = _fresh_config()
+    cfg = config.load_config()
+    assert cfg["ime_auto_ja"] is True
+
+
+def test_load_config_backfills_missing_ime_auto_ja_without_overwriting_others():
+    config = _fresh_config()
+    cfg = config.load_config()
+    del cfg["ime_auto_ja"]
+    cfg["active_soul"] = "soul-1"
+    config.save_config(cfg)
+
+    reloaded = config.load_config()
+    assert reloaded["ime_auto_ja"] is True
+    assert reloaded["active_soul"] == "soul-1"
+
+    with open(config.CONFIG_PATH, "r", encoding="utf-8") as f:
+        on_disk = json.load(f)
+    assert on_disk["ime_auto_ja"] is True
+
+
+def test_load_config_preserves_existing_ime_auto_ja_false():
+    config = _fresh_config()
+    cfg = config.load_config()
+    cfg["ime_auto_ja"] = False
+    config.save_config(cfg)
+
+    reloaded = config.load_config()
+    assert reloaded["ime_auto_ja"] is False
+
+
 def test_load_config_backfills_missing_pet_size_without_overwriting_others():
     config = _fresh_config()
     cfg = config.load_config()

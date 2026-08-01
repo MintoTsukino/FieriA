@@ -274,6 +274,11 @@ DEFAULT_CONFIG = {
     "streaming": True,
     # LLM返信完了時の効果音。ファイルは ui/se/ に同梱（値はそのファイル名、""=鳴らさない）
     "reply_se": "se-poko.mp3",
+    # FieriA拡張: チャット入力欄にフォーカスした瞬間、Windows IMEを日本語入力
+    # （ひらがな）へ自動切替するか（既定True）。pywebview(WebView2)は別プロセスの
+    # ため、Web側のime-mode相当は効かず、gui.Bridge.ensure_ime_japaneseがWin32 API
+    # で切り替える。ime-mode廃止の代替なので既定ON（他のオプトイン設定とは逆）。
+    "ime_auto_ja": True,
 }
 
 # LLM返信完了時の効果音。ファイルは ui/se/ に同梱（値はそのファイル名、""=鳴らさない）

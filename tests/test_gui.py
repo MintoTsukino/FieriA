@@ -1507,3 +1507,60 @@ def test_boot_includes_reply_se():
     bridge = gui.Bridge()
     bridge._cfg["reply_se"] = "se-pichon.mp3"
     assert bridge.boot()["reply_se"] == "se-pichon.mp3"
+
+
+# --- 入力欄フォーカス時のIME自動切替: get_settings/save_settings/ensure_ime_japanese ---
+# 2026-08-02追加。実IME切替（Win32 SendMessage）はテスト環境で検証不能なため、
+# ここでは「設定の出し入れが正しいこと」と「ensure_ime_japaneseが例外を漏らさず
+# dictを返すこと」だけを網にかける（実害なし優先の設計どおり）。
+
+
+def test_get_settings_includes_ime_auto_ja_default_true():
+    import gui
+    bridge = gui.Bridge()
+    assert bridge.get_settings()["ime_auto_ja"] is True
+
+
+def test_save_settings_persists_ime_auto_ja_false():
+    import gui
+    import config as config_mod
+    bridge = gui.Bridge()
+
+    result = bridge.save_settings({"ime_auto_ja": False})
+
+    assert result["ime_auto_ja"] is False
+    reloaded = config_mod.load_config()
+    assert reloaded["ime_auto_ja"] is False
+
+
+def test_save_settings_ime_auto_ja_coerces_truthy_value_to_bool():
+    """auto_role_switch等と同じく、JS側から来る値の型を保証せずここでbool確定させる。"""
+    import gui
+    bridge = gui.Bridge()
+
+    result = bridge.save_settings({"ime_auto_ja": 0})
+
+    assert result["ime_auto_ja"] is False
+
+
+def test_ensure_ime_japanese_returns_disabled_reason_when_setting_off():
+    import gui
+    bridge = gui.Bridge()
+    bridge._cfg["ime_auto_ja"] = False
+
+    result = bridge.ensure_ime_japanese()
+
+    assert result == {"ok": False, "reason": "disabled"}
+
+
+def test_ensure_ime_japanese_never_raises_when_enabled():
+    """テスト環境（フォアグラウンドウィンドウ無し等）でも例外を漏らさずdictを返す。
+    実IME切替の成否は検証不能なので、例外安全であることだけを確認する。"""
+    import gui
+    bridge = gui.Bridge()
+    bridge._cfg["ime_auto_ja"] = True
+
+    result = bridge.ensure_ime_japanese()
+
+    assert isinstance(result, dict)
+    assert "ok" in result

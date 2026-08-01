@@ -465,6 +465,7 @@ class Bridge:
             "pet_character": self._cfg.get("pet_character", "konoha"),
             "streaming": self._cfg.get("streaming", True),
             "reply_se": self._cfg.get("reply_se", "se-poko.mp3"),
+            "ime_auto_ja": self._cfg.get("ime_auto_ja", True),
         }
 
     def save_settings(self, payload):
@@ -525,10 +526,54 @@ class Bridge:
             # 不正値は既定("se-poko.mp3")ではなく""へ倒す（鳴らない方に倒す＝安全側）。
             val = payload["reply_se"]
             self._cfg["reply_se"] = val if val in config_mod.REPLY_SE_CHOICES else ""
+        if "ime_auto_ja" in payload:
+            # auto_role_switch等と同様、JS側からの型を保証せずここでbool確定させる。
+            self._cfg["ime_auto_ja"] = bool(payload["ime_auto_ja"])
         config_mod.save_config(self._cfg)
         self._env = load_env()
         self._ensure_engine()
         return self.get_settings()
+
+    def ensure_ime_japanese(self):
+        """入力欄フォーカス時にIMEを日本語入力（ひらがな）へ切り替える。
+        WebView2の入力ウィンドウは別プロセスのため、ImmSetOpenStatusではなく
+        デフォルトIMEウィンドウへのWM_IME_CONTROLで制御する（プロセス跨ぎで有効）。
+        設定 ime_auto_ja がFalseなら何もしない。失敗はすべて握る（実害なし優先）。"""
+        if not self._cfg.get("ime_auto_ja", True):
+            return {"ok": False, "reason": "disabled"}
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            imm32 = ctypes.windll.imm32
+            WM_IME_CONTROL = 0x0283
+            IMC_SETOPENSTATUS = 0x0006
+            IMC_SETCONVERSIONMODE = 0x0002
+            IME_CMODE_HIRAGANA = 0x0001 | 0x0008  # NATIVE | FULLSHAPE
+
+            fg = user32.GetForegroundWindow()
+            if not fg:
+                return {"ok": False, "reason": "no-foreground"}
+            tid = user32.GetWindowThreadProcessId(fg, None)
+
+            class GUITHREADINFO(ctypes.Structure):
+                _fields_ = [("cbSize", ctypes.c_ulong), ("flags", ctypes.c_ulong),
+                            ("hwndActive", ctypes.c_void_p), ("hwndFocus", ctypes.c_void_p),
+                            ("hwndCapture", ctypes.c_void_p), ("hwndMenuOwner", ctypes.c_void_p),
+                            ("hwndMoveSize", ctypes.c_void_p), ("hwndCaret", ctypes.c_void_p),
+                            ("rcCaret", ctypes.c_long * 4)]
+
+            info = GUITHREADINFO(cbSize=ctypes.sizeof(GUITHREADINFO))
+            if not user32.GetGUIThreadInfo(tid, ctypes.byref(info)):
+                return {"ok": False, "reason": "no-thread-info"}
+            target = info.hwndFocus or fg
+            ime_wnd = imm32.ImmGetDefaultIMEWnd(target)
+            if not ime_wnd:
+                return {"ok": False, "reason": "no-ime-wnd"}
+            user32.SendMessageW(ime_wnd, WM_IME_CONTROL, IMC_SETOPENSTATUS, 1)
+            user32.SendMessageW(ime_wnd, WM_IME_CONTROL, IMC_SETCONVERSIONMODE, IME_CMODE_HIRAGANA)
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "reason": str(e)}
 
     def list_models(self, provider_name):
         """指定プロバイダのモデル一覧を取得（設定画面の「一覧から選ぶ」用）。

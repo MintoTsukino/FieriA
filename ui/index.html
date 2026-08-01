@@ -805,6 +805,10 @@
           </select>
         </div>
         <div class="hint">LLMの返信が届いたときに鳴る音。選ぶとすぐ試し鳴らしする</div>
+        <div class="toggle-row" style="margin-top:12px;">
+          <input type="checkbox" id="ime-auto-ja-checkbox">
+          <label style="min-width:auto;">入力欄フォーカス時に日本語入力へ切り替える</label>
+        </div>
       </div>
 
       <div class="card" id="provider-card">
@@ -2073,6 +2077,16 @@ function renderMarkdownToHtml(raw) {
   $("input-box").addEventListener("keyup", updateSendHint);
   $("input-box").addEventListener("click", updateSendHint);
 
+  // FieriA拡張: 入力欄フォーカス時にIMEを日本語モードへ自動切替（設定でON/OFF可）。
+  // Web側にはime-mode相当の制御手段が無いためPython側(gui.Bridge.ensure_ime_japanese)に
+  // 委譲する。fire-and-forget（結果を待たず、失敗してもチャット動作に影響させない）。
+  // 下の「ウィンドウ復帰時の入力欄フォーカス」からのfocus()でも自然に発火する。
+  $("input-box").addEventListener("focus", function () {
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.ensure_ime_japanese) {
+      window.pywebview.api.ensure_ime_japanese().catch(function () {});
+    }
+  });
+
   // --- ウィンドウ復帰時の入力欄フォーカス ---
   // 他アプリで作業して戻ってくると入力欄のフォーカスが外れ、日本語IMEの状態も
   // 戻ってしまう問題の緩和。チャットビューがactiveかつモーダル/ドロップダウンが
@@ -3117,6 +3131,7 @@ function renderMarkdownToHtml(raw) {
     $("theme-select").value = state.settings.theme || "light";
     $("streaming-enabled-checkbox").checked = state.settings.streaming !== false;
     $("reply-se-select").value = state.settings.reply_se || "";
+    $("ime-auto-ja-checkbox").checked = state.settings.ime_auto_ja !== false;
   }
 
   // FieriA拡張: LLM返信完了時のSE。state.replySeはboot()または設定変更時に更新され、
@@ -3172,6 +3187,18 @@ function renderMarkdownToHtml(raw) {
       state.replySe = data.reply_se || "";
       renderThemeCard();
       showToast("返信音の設定を保存した");
+    }).catch(function (err) {
+      showToast("保存に失敗した: " + err, "error");
+    });
+  });
+
+  // FieriA拡張: 入力欄フォーカス時のIME自動日本語化。他のcheckbox系設定と同じ即時保存パターン
+  $("ime-auto-ja-checkbox").addEventListener("change", function () {
+    var payload = { ime_auto_ja: $("ime-auto-ja-checkbox").checked };
+    window.pywebview.api.save_settings(payload).then(function (data) {
+      state.settings = data;
+      renderThemeCard();
+      showToast("IME自動切替の設定を保存した");
     }).catch(function (err) {
       showToast("保存に失敗した: " + err, "error");
     });
