@@ -73,3 +73,111 @@ def test_split_respects_line_boundaries():
 def test_split_oversized_single_line_kept_whole():
     text = "x" * 25
     assert importer._split_text(text, limit=10) == [text]
+
+
+class FakeLLM:
+    def __init__(self, replies):
+        self.replies = list(replies)
+        self.calls = []
+
+    def chat(self, messages, max_tokens=None):
+        self.calls.append([dict(m) for m in messages])
+        return self.replies.pop(0)
+
+
+TOOL_REPLY = (
+    "整理するじょ。\n"
+    "```fieria-tool\n"
+    '{"tool":"write_wiki","topic":"試験トピック","content":"本文の要点","mode":"append"}\n'
+    "```\n"
+    "```fieria-tool\n"
+    '{"tool":"update_memory_index","line":"- [試験トピック](wiki/試験トピック.md) — テスト"}\n'
+    "```\n"
+)
+
+
+def _staged_soul(tmp_path, name="取り込み.md", body="# 見出し\n中身じゃ"):
+    sid = _soul()
+    src = tmp_path / name
+    src.write_text(body, encoding="utf-8")
+    importer.stage_files(sid, [str(src)])
+    return sid
+
+
+def test_import_one_writes_wiki_and_moves_file(tmp_path):
+    sid = _staged_soul(tmp_path)
+    res = importer.import_one({}, FakeLLM([TOOL_REPLY]), sid, "取り込み.md")
+    assert res["ok"] is True
+    assert "本文の要点" in soul.read_file(sid, "wiki/試験トピック.md")
+    assert "試験トピック" in soul.read_file(sid, "MEMORY.md")
+    assert importer.list_inbox(sid) == []
+    imported = os.listdir(os.path.join(soul.soul_dir(sid), "imported"))
+    assert imported == ["取り込み.md"]
+
+
+def test_import_one_system_text_has_name_and_index(tmp_path):
+    sid = _staged_soul(tmp_path)
+    soul.append_file(sid, "MEMORY.md", "- 既存索引の行\n")
+    fake = FakeLLM([TOOL_REPLY])
+    importer.import_one({}, fake, sid, "取り込み.md")
+    system_text = fake.calls[0][0]["content"]
+    assert fake.calls[0][0]["role"] == "system"
+    assert "インポータ試験" in system_text
+    assert "既存索引の行" in system_text
+    user_text = fake.calls[0][1]["content"]
+    assert "取り込み.md" in user_text
+    assert "中身じゃ" in user_text
+
+
+def test_import_one_disallowed_tool_not_executed(tmp_path):
+    sid = _staged_soul(tmp_path)
+    bad = (
+        "```fieria-tool\n"
+        '{"tool":"archive_memory","target":"wiki/x.md"}\n'
+        "```\n" + TOOL_REPLY
+    )
+    res = importer.import_one({}, FakeLLM([bad]), sid, "取り込み.md")
+    assert res["ok"] is True
+    rejected = [op for op in res["ops"] if not op["ok"]]
+    assert any(op["detail"] == "インポートでは使えないツール" for op in rejected)
+    assert not os.path.exists(os.path.join(soul.soul_dir(sid), "archive"))
+
+
+def test_import_one_no_tools_then_nudge(tmp_path):
+    sid = _staged_soul(tmp_path)
+    fake = FakeLLM(["読んだだけで何もしない", TOOL_REPLY])
+    res = importer.import_one({}, fake, sid, "取り込み.md")
+    assert res["ok"] is True
+    assert len(fake.calls) == 2
+    assert "ツール呼び出しが1つも実行されていない" in fake.calls[1][-1]["content"]
+
+
+def test_import_one_total_failure_keeps_file(tmp_path):
+    sid = _staged_soul(tmp_path)
+    res = importer.import_one({}, FakeLLM(["何もしない1", "何もしない2"]), sid, "取り込み.md")
+    assert res["ok"] is False
+    assert res["detail"] == "記憶への書き込みが行われなかった"
+    assert importer.list_inbox(sid) == ["取り込み.md"]
+
+
+def test_import_one_llm_exception_keeps_file(tmp_path):
+    sid = _staged_soul(tmp_path)
+
+    class BoomLLM:
+        def chat(self, messages, max_tokens=None):
+            raise RuntimeError("接続断")
+
+    res = importer.import_one({}, BoomLLM(), sid, "取り込み.md")
+    assert res["ok"] is False
+    assert importer.list_inbox(sid) == ["取り込み.md"]
+
+
+def test_import_one_multichunk_calls_llm_per_chunk(tmp_path, monkeypatch):
+    monkeypatch.setattr(importer, "CHUNK_CHARS", 10)
+    sid = _staged_soul(tmp_path, body="1234\n5678\nabcd\n")
+    fake = FakeLLM([TOOL_REPLY, TOOL_REPLY])
+    res = importer.import_one({}, fake, sid, "取り込み.md")
+    assert res["ok"] is True
+    assert len(fake.calls) == 2
+    assert "分割 1/2" in fake.calls[0][1]["content"]
+    assert "分割 2/2" in fake.calls[1][1]["content"]
