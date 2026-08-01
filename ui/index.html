@@ -102,6 +102,9 @@
     background: var(--bg); border: 1px solid var(--line);
     border-radius: var(--card-radius); box-shadow: var(--shadow);
     min-width: 260px; padding: 6px; display: none;
+    /* 上方向に開くドロップダウンなので、画面上端で見切れないよう
+       ビューポート基準でmax-heightを付けてスクロールさせる（実機フィードバック）。 */
+    max-height: min(60vh, calc(100vh - 80px)); overflow-y: auto;
   }
   #model-menu.open { display: block; }
   #model-menu .section-label {
@@ -540,6 +543,25 @@
   #import-bar-track { height: 6px; background: var(--line); border-radius: 99px; overflow: hidden; margin: 10px 0; }
   #import-bar-fill { height: 100%; width: 0%; background: var(--accent); }
   #import-log { max-height: 180px; overflow-y: auto; font-size: 12px; margin: 8px 0; }
+
+  /* --- 区切り確認モーダル（import-modalと同じ.open慣習の小型確認ダイアログ） --- */
+  #break-confirm-modal {
+    display: none; position: fixed; inset: 0; background: var(--overlay);
+    align-items: center; justify-content: center; z-index: 100;
+  }
+  #break-confirm-modal.open { display: flex; }
+  #break-confirm-modal .box {
+    background: var(--bg); color: var(--fg); border-radius: var(--card-radius);
+    padding: 20px; width: min(380px, 90vw);
+  }
+  #break-confirm-modal h3 { margin: 0 0 14px 0; font-size: 15px; }
+  #break-confirm-modal p { line-height: 1.7; }
+  #break-confirm-modal .row { display: flex; align-items: center; gap: 10px; margin: 14px 0 0; }
+  #break-confirm-modal button {
+    background: var(--accent); color: var(--accent-fg); border: none; border-radius: 10px;
+    padding: 8px 16px; font-size: 13px; cursor: pointer;
+  }
+  #break-confirm-modal button.ghost { background: none; color: var(--fg-dim); border: 1px solid var(--line); }
 
   #boot-guard {
     position: fixed; inset: 0; background: var(--bg); display: flex;
@@ -992,6 +1014,17 @@
         <button id="import-cancel-btn" class="ghost">キャンセル</button>
         <button id="import-done-btn" style="display:none;">閉じる</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<div id="break-confirm-modal">
+  <div class="box">
+    <h3>区切り</h3>
+    <p>ここまでの文脈を区切る？会話はログに残る。</p>
+    <div class="row">
+      <button id="break-confirm-btn">区切る</button>
+      <button id="break-confirm-cancel-btn" class="ghost">やめる</button>
     </div>
   </div>
 </div>
@@ -1807,11 +1840,20 @@ function renderMarkdownToHtml(raw) {
   });
 
   // 「区切り」: 直近の会話文脈だけをリセットする（記憶・ログは消えない）。
-  // confirmダイアログは挟まない——ログに全部残る非破壊操作なので、誤爆しても
-  // 実害が無く、確認を挟むほどの操作ではないと判断（代わりに区切り線の表示自体を
-  // 「押した結果が見える」フィードバックとする）。
+  // 非破壊操作（ログは全部残る）だが誤爆しやすいという実機フィードバックがあり、
+  // import-modalと同じ.open慣習の確認モーダルを挟んでから実行する。
   $("break-btn").addEventListener("click", function () {
     if (sending) return;
+    $("break-confirm-modal").classList.add("open");
+  });
+  $("break-confirm-cancel-btn").addEventListener("click", function () {
+    $("break-confirm-modal").classList.remove("open");
+  });
+  $("break-confirm-modal").addEventListener("click", function (e) {
+    if (e.target === $("break-confirm-modal")) $("break-confirm-modal").classList.remove("open");
+  });
+  $("break-confirm-btn").addEventListener("click", function () {
+    $("break-confirm-modal").classList.remove("open");
     window.pywebview.api.insert_break().then(function (result) {
       if (!result || !result.ok) return;
       $("chat-log").innerHTML = "";
@@ -2041,6 +2083,7 @@ function renderMarkdownToHtml(raw) {
     if (!$("chat-view").classList.contains("active")) return;
     if ($("modal-overlay").classList.contains("open")) return;
     if ($("import-modal").classList.contains("open")) return;
+    if ($("break-confirm-modal").classList.contains("open")) return;
     if ($("role-menu").classList.contains("open")) return;
     if ($("soul-menu").classList.contains("open")) return;
     if ($("model-menu").classList.contains("open")) return;
@@ -2176,7 +2219,10 @@ function renderMarkdownToHtml(raw) {
   });
   document.addEventListener("click", closeContextMenu);
   document.addEventListener("keydown", function (e) {
-    if (e.key === "Escape") closeContextMenu();
+    if (e.key === "Escape") {
+      closeContextMenu();
+      $("break-confirm-modal").classList.remove("open");
+    }
   });
 
   // --- ロール切替 ---
