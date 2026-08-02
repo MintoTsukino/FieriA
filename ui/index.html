@@ -5,6 +5,9 @@
     --bg: #ffffff; --bg2: #f5f5f5; --fg: #1a1a1a; --fg-dim: #777;
     --line: #e0e0e0; --accent: #1a1a1a; --accent-fg: #ffffff; --bubble-user: #1a1a1a; --card-radius: 14px;
     --shadow: 0 4px 16px rgba(0,0,0,.08); --danger: #a33; --overlay: rgba(0,0,0,.35); --code-bg: #e8e8e8;
+    /* テーマ登録制への一般化（2026-08-02）: body font-familyの直書きをここへ集約。
+       既定値は従来のbody font-family値そのまま＝light/darkの見た目は不変。 */
+    --font-main: "Yu Gothic UI", "Meiryo", "Segoe UI", sans-serif;
     /* --- ペット（ドット絵マスコット）配色 --- */
     --pet-body: #ffffff; --pet-ear: #ffffff; --pet-belly: #eef0f3; --pet-cheek: #ffb3c0;
     --pet-eye: #2a2a2a; --pet-outline: rgba(0,0,0,.18);
@@ -16,11 +19,65 @@
     --pet-body: #e8e6e3; --pet-ear: #e8e6e3; --pet-belly: #cfcdc9; --pet-cheek: #e08fa0;
     --pet-eye: #1d1e20; --pet-outline: rgba(0,0,0,.5);
   }
+  /* --- 着せ替えテーマ第1弾（2026-08-02）: ゲーミングネオン/サイバーパンク/ヴェイパーウェイヴ/トキシック ---
+     マッピング原則: 最暗色→--bg、次暗→--bg2、最明→--fg（可読性優先で必要ならパレット外の淡色も使用）、
+     アクセント1→--accent、--bubble-userはアクセント寄り、--lineは--fg-dimより暗く。 */
+  :root[data-theme="neon"] {
+    --bg: #05030c; --bg2: #150c26; --fg: #f1ecff; --fg-dim: #9d8fc4;
+    --line: #2f2050; --accent: #ff2bd6; --accent-fg: #0a0414; --bubble-user: #ff2bd6; --card-radius: 14px;
+    --shadow: 0 4px 20px rgba(0,0,0,.6); --danger: #ff4d6d; --overlay: rgba(5,3,12,.72); --code-bg: #1c1030;
+    --font-main: "Yu Gothic UI Semibold", "Yu Gothic UI", "Meiryo", "Segoe UI", sans-serif;
+  }
+  :root[data-theme="cyberpunk"] {
+    --bg: #080b0c; --bg2: #0d1415; --fg: #e7f3f2; --fg-dim: #7fa19d;
+    --line: #1c2c2c; --accent: #ffb020; --accent-fg: #0d1415; --bubble-user: #ffb020; --card-radius: 4px;
+    --shadow: 0 2px 10px rgba(0,0,0,.5); --danger: #ff4d4d; --overlay: rgba(8,11,12,.75); --code-bg: #101a1a;
+    --font-main: "Consolas", "Cascadia Mono", "MS Gothic", monospace;
+  }
+  :root[data-theme="vapor"] {
+    --bg: #1b0b3a; --bg2: #2a1354; --fg: #fdf3ff; --fg-dim: #c9a8e0;
+    --line: #4a2470; --accent: #ff71ce; --accent-fg: #1b0b3a; --bubble-user: #ff71ce; --card-radius: 14px;
+    --shadow: 0 8px 30px rgba(185,103,255,.35); --danger: #ff4d6d; --overlay: rgba(27,11,58,.7); --code-bg: #2a1354;
+    --font-main: "MS Gothic", "ＭＳ ゴシック", "Courier New", monospace;
+  }
+  :root[data-theme="toxic"] {
+    --bg: #000000; --bg2: #0c120a; --fg: #eafff0; --fg-dim: #6fae74;
+    --line: #173318; --accent: #00ff41; --accent-fg: #020a03; --bubble-user: #a4ff00; --card-radius: 10px;
+    --shadow: 0 0 16px rgba(0,255,65,.25); --danger: #ff4d4d; --overlay: rgba(0,0,0,.75); --code-bg: #0a1a0c;
+    --font-main: "Bahnschrift", "Yu Gothic UI", "Meiryo", sans-serif;
+  }
+  /* --- 着せ替えテーマ第2弾（2026-08-02）: 和風/ターミナル/CRT/グリッチ ---
+     washiのみライトベース（F4ECDCが地・1C1A1Bが文字）。他はダークベース。
+     cli/crtは吹き出しレイアウトのままの近似版（行ベース化は第2弾スコープ外）。 */
+  :root[data-theme="washi"] {
+    --bg: #f4ecdc; --bg2: #ece0c8; --fg: #1c1a1b; --fg-dim: #8a7a5f;
+    --line: #ddcca8; --accent: #c1352b; --accent-fg: #f4ecdc; --bubble-user: #c1352b; --card-radius: 10px;
+    --shadow: 0 4px 16px rgba(90,60,20,.14); --danger: #a8281f; --overlay: rgba(28,26,27,.4); --code-bg: #ece0c8;
+    --font-main: "Yu Mincho", "游明朝", "Hiragino Mincho ProN", serif;
+  }
+  :root[data-theme="cli"] {
+    --bg: #0c0c0c; --bg2: #141414; --fg: #cfcfcf; --fg-dim: #7a7a7a;
+    --line: #2a2a2a; --accent: #7fdc7f; --accent-fg: #0c0c0c; --bubble-user: #6fc3d9; --card-radius: 0;
+    --shadow: none; --danger: #ff6a6a; --overlay: rgba(0,0,0,.75); --code-bg: #111111;
+    --font-main: "Consolas", "Cascadia Mono", "Share Tech Mono", monospace;
+  }
+  :root[data-theme="crt"] {
+    --bg: #07160b; --bg2: #12291a; --fg: #2bff88; --fg-dim: #5aa878;
+    --line: #1f4a2c; --accent: #2bff88; --accent-fg: #07160b; --bubble-user: #8fffbe; --card-radius: 8px;
+    --shadow: 0 0 20px rgba(43,255,136,.18); --danger: #ff6a6a; --overlay: rgba(7,22,11,.8); --code-bg: #0f2417;
+    --font-main: "Consolas", "Cascadia Mono", "Share Tech Mono", monospace;
+  }
+  :root[data-theme="glitch"] {
+    --bg: #0e0e0e; --bg2: #171717; --fg: #f2f2f2; --fg-dim: #999999;
+    --line: #2a2a2a; --accent: #ff003c; --accent-fg: #f2f2f2; --bubble-user: #ff003c; --card-radius: 4px;
+    --shadow: 0 2px 10px rgba(0,0,0,.6); --danger: #ff003c; --overlay: rgba(6,6,6,.8); --code-bg: #1a1a1a;
+    --font-main: "Consolas", "Cascadia Mono", "Share Tech Mono", monospace;
+  }
   * { box-sizing: border-box; }
   html, body {
     margin: 0; padding: 0; height: 100%;
     background: var(--bg); color: var(--fg);
-    font-family: "Yu Gothic UI", "Meiryo", "Segoe UI", sans-serif;
+    font-family: var(--font-main);
     font-size: 15px;
   }
   #app {
@@ -614,6 +671,152 @@
   #context-menu.open { display: block; }
   #context-menu .item { padding: 10px 12px; border-radius: 10px; cursor: pointer; font-size: 14px; }
   #context-menu .item:hover { background: var(--bg); }
+
+  /* --- 着せ替えテーマ効果レイヤ（2026-08-02）: body[data-theme-fx]でスコープ。
+     すべて軽量CSSのみ・pointer-events:noneの装飾オーバーレイ or 既存要素へのbox-shadow等の追加に限定。
+     常時アニメはprefers-reduced-motionで停止する。 --*/
+
+  /* neon: 背景の微グリッド＋アクセントのネオングロー */
+  body[data-theme-fx="neon"] {
+    background-image:
+      linear-gradient(rgba(0,229,255,.06) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,43,214,.06) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+  body[data-theme-fx="neon"] .nav-btn.active,
+  body[data-theme-fx="neon"] #compose-row button#send-btn,
+  body[data-theme-fx="neon"] .bubble-row.user .bubble {
+    box-shadow: 0 0 4px rgba(255,43,214,.9), 0 0 18px rgba(255,43,214,.5);
+    animation: theme-neon-pulse 2.6s ease-in-out infinite;
+  }
+  @keyframes theme-neon-pulse {
+    0%, 100% { box-shadow: 0 0 4px rgba(255,43,214,.9), 0 0 18px rgba(255,43,214,.5); }
+    50% { box-shadow: 0 0 6px rgba(0,229,255,.9), 0 0 24px rgba(255,43,214,.7); }
+  }
+
+  /* cyberpunk: 静的微ノイズ（SVGデータURIをoverlayに敷く）。card-radiusは変数側で小さめ済み */
+  body[data-theme-fx="cyberpunk"] {
+    position: relative;
+  }
+  body[data-theme-fx="cyberpunk"]::after {
+    content: "";
+    position: fixed; inset: 0; z-index: 2147483647; pointer-events: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    opacity: .045;
+    mix-blend-mode: overlay;
+  }
+
+  /* vapor: チャット面だけに夕陽グロー（局所）＋重なる要素の半透明ぼかし。
+     nav・サイドバーは通常の--bg系のまま保ち、明るいグラデに文字が埋もれないようにする
+     （グローの中心・広がりも、role-bar/compose-rowの位置には強く掛からない範囲に収める）。 */
+  body[data-theme-fx="vapor"] #chat-view {
+    background-image: radial-gradient(90% 70% at 28% 55%, #fffb96 0%, #ff71ce 20%, #b967ff 42%, #1b0b3a 68%);
+    background-repeat: no-repeat;
+  }
+  body[data-theme-fx="vapor"] .card,
+  body[data-theme-fx="vapor"] .bubble-row.ai .bubble,
+  body[data-theme-fx="vapor"] #compose-row textarea {
+    background: rgba(27,11,58,.55);
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+  }
+
+  /* toxic: 走査線オーバーレイ（静的、微アニメのみ） */
+  body[data-theme-fx="toxic"] {
+    position: relative;
+  }
+  body[data-theme-fx="toxic"]::after {
+    content: "";
+    position: fixed; inset: 0; z-index: 2147483647; pointer-events: none;
+    background-image: repeating-linear-gradient(
+      to bottom, rgba(0,255,65,.05) 0px, rgba(0,255,65,.05) 1px, transparent 1px, transparent 3px
+    );
+    animation: theme-toxic-scan 6s linear infinite;
+  }
+  @keyframes theme-toxic-scan {
+    0% { background-position: 0 0; }
+    100% { background-position: 0 24px; }
+  }
+  body[data-theme-fx="toxic"] .nav-btn.active,
+  body[data-theme-fx="toxic"] #compose-row button#send-btn {
+    box-shadow: 0 0 4px rgba(0,255,65,.8), 0 0 14px rgba(0,255,65,.45);
+  }
+
+  /* --- 着せ替えテーマ効果レイヤ第2弾（2026-08-02）: 和風/ターミナル/CRT/グリッチ --- */
+
+  /* washi: 和紙風の淡いテクスチャ（CSSグラデのみ・静的）＋カード/吹き出しに朱の左罫線 */
+  body[data-theme-fx="washi"] {
+    background-image:
+      radial-gradient(120% 90% at 15% -10%, rgba(224,137,74,.16) 0%, transparent 45%),
+      radial-gradient(90% 70% at 100% 110%, rgba(193,53,43,.08) 0%, transparent 50%),
+      repeating-linear-gradient(115deg, rgba(28,26,27,.02) 0px, rgba(28,26,27,.02) 1px, transparent 1px, transparent 3px);
+  }
+  body[data-theme-fx="washi"] .bubble-row.ai .bubble,
+  body[data-theme-fx="washi"] .card,
+  body[data-theme-fx="washi"] #compose-row textarea {
+    border-left: 3px solid var(--accent);
+  }
+
+  /* cli: 微ノイズのみ（角丸0・影なしは変数側で済み） */
+  body[data-theme-fx="cli"] {
+    position: relative;
+  }
+  body[data-theme-fx="cli"]::after {
+    content: "";
+    position: fixed; inset: 0; z-index: 2147483647; pointer-events: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    opacity: .035;
+    mix-blend-mode: overlay;
+  }
+
+  /* crt: 単色フォスファーの走査線＋ビネット＋微ブルーム */
+  body[data-theme-fx="crt"] {
+    position: relative;
+  }
+  body[data-theme-fx="crt"]::after {
+    content: "";
+    position: fixed; inset: 0; z-index: 2147483647; pointer-events: none;
+    background-image:
+      repeating-linear-gradient(to bottom, rgba(43,255,136,.06) 0px, rgba(43,255,136,.06) 1px, transparent 1px, transparent 3px),
+      radial-gradient(120% 90% at 50% 50%, transparent 55%, rgba(0,0,0,.55) 100%);
+    animation: theme-crt-scan 7s linear infinite;
+  }
+  @keyframes theme-crt-scan {
+    0% { background-position: 0 0, 0 0; }
+    100% { background-position: 0 24px, 0 0; }
+  }
+  body[data-theme-fx="crt"] .bubble-row .bubble,
+  body[data-theme-fx="crt"] .nav-btn.active,
+  body[data-theme-fx="crt"] #compose-row button#send-btn {
+    text-shadow: 0 0 4px rgba(43,255,136,.65);
+  }
+
+  /* glitch: アクセント要素に赤/シアンの色収差。常時は微量、スライス風の強い動きはホバー時のみ */
+  body[data-theme-fx="glitch"] .nav-btn.active,
+  body[data-theme-fx="glitch"] #compose-row button#send-btn,
+  body[data-theme-fx="glitch"] .bubble-row.user .bubble {
+    text-shadow: -1px 0 rgba(255,0,60,.8), 1px 0 rgba(0,255,240,.8);
+  }
+  body[data-theme-fx="glitch"] .nav-btn.active:hover,
+  body[data-theme-fx="glitch"] #compose-row button#send-btn:hover {
+    animation: theme-glitch-slice .35s steps(2, jump-none) infinite;
+  }
+  @keyframes theme-glitch-slice {
+    0%, 100% { clip-path: inset(0 0 0 0); transform: translateX(0); }
+    50% { clip-path: inset(20% 0 30% 0); transform: translateX(1px); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    body[data-theme-fx="neon"] .nav-btn.active,
+    body[data-theme-fx="neon"] #compose-row button#send-btn,
+    body[data-theme-fx="neon"] .bubble-row.user .bubble,
+    body[data-theme-fx="toxic"]::after,
+    body[data-theme-fx="crt"]::after,
+    body[data-theme-fx="glitch"] .nav-btn.active:hover,
+    body[data-theme-fx="glitch"] #compose-row button#send-btn:hover {
+      animation: none;
+    }
+  }
 </style>
 
 <div id="app">
@@ -967,10 +1170,7 @@
         <h3>テーマ</h3>
         <div class="row">
           <label>表示</label>
-          <select id="theme-select">
-            <option value="light">ライト</option>
-            <option value="dark">ダーク</option>
-          </select>
+          <select id="theme-select"></select>
         </div>
         <div class="toggle-row" style="margin-top:12px;">
           <input type="checkbox" id="streaming-enabled-checkbox">
@@ -1203,13 +1403,33 @@ function renderMarkdownToHtml(raw) {
 }
 /* MDRENDER_END */
 (function () {
+  // テーマ登録制への一般化（2026-08-02）: 設定のテーマselectはここから動的生成する。
+  // このタスクでは基盤のみ（light/darkの2件）。後続タスクが8案を追記する。
+  var THEMES = [
+    { id: "light", label: "ライト" },
+    { id: "dark", label: "ダーク" },
+    { id: "neon", label: "ゲーミングネオン" },
+    { id: "cyberpunk", label: "サイバーパンク" },
+    { id: "vapor", label: "ヴェイパーウェイヴ" },
+    { id: "toxic", label: "トキシック" },
+    { id: "washi", label: "和風" },
+    { id: "cli", label: "ターミナル" },
+    { id: "crt", label: "CRT" },
+    { id: "glitch", label: "グリッチ" },
+  ];
+
   var state = {
     souls: [], roles: [], active_soul: null, active_role: null, fact_layer: null,
     settings: null, theme: "light", pet_enabled: true, pet_skins: {}, replySe: "se-poko.mp3",
   };
 
   function applyTheme(theme) {
-    document.documentElement.dataset.theme = theme === "dark" ? "dark" : "light";
+    // THEMESに登録済みのidのみ反映する。未登録・不正値は"light"へ倒す
+    // （bodyのdata-theme-fxも同じidに揃え、効果CSSのフックと変数ブロックが必ず一致するようにする）。
+    var known = THEMES.some(function (t) { return t.id === theme; });
+    var id = known ? theme : "light";
+    document.documentElement.dataset.theme = id;
+    document.body.dataset.themeFx = id;
   }
 
   var OP_LABELS = {
@@ -3161,8 +3381,21 @@ function renderMarkdownToHtml(raw) {
     });
   });
 
+  function populateThemeSelect() {
+    var sel = $("theme-select");
+    if (sel.dataset.populated === "1") return;
+    THEMES.forEach(function (t) {
+      var opt = document.createElement("option");
+      opt.value = t.id;
+      opt.textContent = t.label;
+      sel.appendChild(opt);
+    });
+    sel.dataset.populated = "1";
+  }
+
   function renderThemeCard() {
     if (!state.settings) return;
+    populateThemeSelect();
     $("theme-select").value = state.settings.theme || "light";
     $("streaming-enabled-checkbox").checked = state.settings.streaming !== false;
     $("reply-se-select").value = state.settings.reply_se || "";

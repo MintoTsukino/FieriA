@@ -287,6 +287,14 @@ REPLY_SE_CHOICES = (
     "se-pofun.mp3", "se-poko.mp3", "se-pichon.mp3",
 )
 
+# 着せ替えテーマの既知id。既存light/darkに加え、後続タスクで実装する8案の枠を
+# 先に確保しておく（2026-08-02 テーマ登録制への一般化）。gui.save_settingsの
+# ホワイトリスト正規化とui/index.htmlのTHEMES配列が参照する共通の正。
+THEME_IDS = (
+    "light", "dark", "neon", "cyberpunk", "vapor", "toxic",
+    "washi", "cli", "crt", "glitch",
+)
+
 
 def load_config():
     os.makedirs(HOME, exist_ok=True)
