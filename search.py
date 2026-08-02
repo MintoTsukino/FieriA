@@ -128,6 +128,12 @@ def _ensure_index_inner(soul_id):
         if old_state == new_state:
             return  # 索引は最新のまま。再構築不要
         con.execute("DROP TABLE IF EXISTS docs")
+        # _docs_rawもDROPしてから作る。従来はDROPせずCREATEしていたため2回目以降の
+        # 再構築が必ず「already exists」で失敗し、ensure_indexの修復経路が
+        # index.sqliteをファイルごと削除していた（FTSだけの時代は実害が見えなかったが、
+        # vectorsが同居し始めてから「会話のたびに全ベクトル消失」として顕在化。
+        # 2026-08-03実環境で発見）。ファイル削除の修復経路は本物の破損専用に戻す。
+        con.execute("DROP TABLE IF EXISTS _docs_raw")
         con.execute(
             "CREATE VIRTUAL TABLE docs USING fts5("
             "source UNINDEXED, date UNINDEXED, who UNINDEXED, content, "

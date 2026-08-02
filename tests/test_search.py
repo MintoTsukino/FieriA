@@ -455,3 +455,44 @@ def test_update_vectors_reembeds_changed_chunk_same_key(monkeypatch):
     embedded = [t for c in calls for t in c]
     assert any("書き換えた新しい内容" in t for t in embedded), \
         "内容変更が再埋め込みされていない（古いベクトルが残る）"
+
+
+def test_fts_rebuild_preserves_vectors(monkeypatch):
+    """FTS再構築（記憶ファイルの変化で毎回起きる）がベクトルを道連れにしないこと。
+    従来は_docs_rawをDROPせずCREATEしていたため2回目以降の再構築が必ず失敗し、
+    修復経路がindex.sqliteをファイルごと削除→vectorsが全滅していた
+    （実環境で発見・2026-08-03。会話1メッセージごとに全ベクトル消失）。"""
+    import embed
+    import search
+    import soul as soul_mod
+    sid = soul_mod.create_soul("再構築生存テスト", "コア")
+
+    monkeypatch.setattr(embed, "embed_texts_batched",
+                        lambda u, m, texts, batch=32: [[1.0, 0.0] for _ in texts])
+    cfg = {"enabled": True, "engine_url": "http://x", "model": "m1"}
+    search.ensure_index(sid)
+    search.update_vectors(sid, cfg)
+
+    import sqlite3
+    con = sqlite3.connect(search._db_path(sid))
+    n_before = con.execute("SELECT COUNT(*) FROM vectors").fetchone()[0]
+    con.close()
+    assert n_before > 0
+
+    # 記憶ファイルを追加してFTS再構築を誘発（実運用の「会話でログが増えた」に相当）
+    soul_mod.write_file(sid, "wiki/新規.md", "再構築の引き金になる新しい記憶")
+    search.ensure_index(sid)
+    # さらにもう一回（「必ず失敗する2回目」を確実に踏む）
+    soul_mod.write_file(sid, "wiki/新規2.md", "もう一度引き金")
+    search.ensure_index(sid)
+
+    con = sqlite3.connect(search._db_path(sid))
+    tables = [r[0] for r in con.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")]
+    assert "vectors" in tables, "再構築でvectorsテーブルごと消えた"
+    n_after = con.execute("SELECT COUNT(*) FROM vectors").fetchone()[0]
+    con.close()
+    assert n_after >= n_before, "再構築でベクトルが減った"
+    # FTS側も正しく再構築されている（新ファイルが検索できる）
+    hits = search.search(sid, "引き金になる新しい記憶")
+    assert any(h["source"] == "wiki/新規.md" for h in hits)
