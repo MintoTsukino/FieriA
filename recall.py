@@ -202,17 +202,28 @@ def hybrid_search(cfg, soul_id, query, limit=8):
     複数語の重み付けマージとは前提が違うため）。embedding無効・失敗時は
     search_mod.search()の結果をそのまま返す（従来動作）。"""
     search_mod.ensure_index(soul_id)
-    literal_hits = search_mod.search(soul_id, query, limit=limit)
+
+    def _drop_today(hits):
+        # エコー汚染対策: 「◯◯について覚えてる?」という質問自体が今日のログに残り、
+        # 完全一致として次の検索の上位を占領する（実機8件中5件がエコーだった事例・
+        # 2026-08-03）。今日の会話は目の前にあり検索で思い出す必要が無いため除外する
+        # ——auto-recall側の今日ログ除外と同じ思想の検索版。
+        today = _today_log_source()
+        return [h for h in hits if h.get("source") != today]
+
+    # 除外で目減りする分を見越して多めに取り、除外後にlimitへ絞る
+    literal_hits = _drop_today(search_mod.search(soul_id, query, limit=limit * 2))
     embedding_cfg = (cfg or {}).get("embedding", {}) if cfg else {}
     if not embedding_cfg.get("enabled"):
-        return literal_hits
+        return literal_hits[:limit]
     try:
         qvec = embed_mod.embed_query(
             embedding_cfg.get("engine_url", ""), embedding_cfg.get("model", ""), query)
-        semantic_hits = search_mod.semantic_search(soul_id, qvec, limit=SEMANTIC_LIMIT)
+        semantic_hits = _drop_today(
+            search_mod.semantic_search(soul_id, qvec, limit=SEMANTIC_LIMIT * 2))
     except Exception:
-        return literal_hits
-    fused = _rrf_fuse(literal_hits, semantic_hits)
+        return literal_hits[:limit]
+    fused = _rrf_fuse(literal_hits, semantic_hits[:SEMANTIC_LIMIT])
     return [h for h, _ in fused][:limit]
 
 

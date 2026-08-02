@@ -624,3 +624,25 @@ def test_hybrid_search_fuses_semantic_hits_when_enabled(monkeypatch):
     sources = [h["source"] for h in hits]
 
     assert "wiki/意味のみ.md" in sources
+
+
+# --- 明示検索のエコー汚染対策——2026-08-03 ---
+# 「ごはんについて覚えてる?」と聞くたび、その質問自体がログに残って次の検索の
+# 上位を占領する（実機でコノハの検索結果8件中5件が当日の質問エコーだった）。
+# search_memory（hybrid_search）は今日のログを除外する。auto-recall側の
+# 既存除外（今日ログはコンテキスト復元済み）と同じ思想の検索版。
+
+def test_hybrid_search_excludes_today_log(monkeypatch):
+    import datetime
+    import search as search_mod
+    import soul as soul_mod
+    sid = soul_mod.create_soul("エコー除外テスト", "コア")
+    today = datetime.date.today().isoformat()
+    # 今日のログ（エコー）と、過去のwiki（本命）を用意
+    soul_mod.append_log(sid, "user", "りんごについて覚えてる？")
+    soul_mod.write_file(sid, "wiki/果物.md", "りんごを一緒に食べた思い出")
+    hits = recall.hybrid_search({}, sid, "りんご")
+    sources = [h.get("source") for h in hits]
+    assert "wiki/果物.md" in sources
+    assert f"logs/{today}.jsonl" not in sources, \
+        "今日の質問エコーが検索結果に混ざっている"
