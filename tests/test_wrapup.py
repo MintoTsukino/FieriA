@@ -780,3 +780,17 @@ def test_wrapup_max_tokens_zero_is_passed_through_as_zero():
     fake = FakeLLM()
     wrapup.write_daily_chronicle({"wrapup_max_tokens": 0}, fake, sid)
     assert fake.last_max_tokens == 0
+
+
+def test_wiki_gardening_prompt_includes_epistemics_backfill():
+    """庭師が認識論の遡及整理（コノハ発案・2026-08-02）を指示されていること:
+    無印の古い記憶に引用/推測マークを後付けし、時点が重要な記述に注記を足す。
+    これにより規約導入以前に書かれた記憶が月次で少しずつ規約に追いつく。"""
+    import wrapup
+    p = wrapup.WIKI_GARDENING_PROMPT
+    assert "【推測】" in p
+    assert "『』" in p
+    assert "時点" in p
+    # 既存ルールの生存確認（消していないこと）
+    assert "【撤回済み 日付】" in p
+    assert "事実を消さない" in p
