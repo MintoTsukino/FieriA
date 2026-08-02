@@ -226,3 +226,232 @@ def test_search_finds_notes_history_content():
 
     assert len(hits) == 1
     assert hits[0]["source"].startswith("notes_history/self_notes-")
+
+
+# --- ベクトル索引（セマンティック検索・2026-08-03追加） ---
+# embed層(embed.embed_texts_batched)はmonkeypatchし、実Ollama・実ネットワークには触れない。
+
+
+def _fake_embed_batched(vec_for=None, calls=None):
+    """embed.embed_texts_batchedの差し替え用フェイク。calls(list)を渡すと
+    呼び出しごとの入力textsを記録する。vec_forはtext->vecの関数（既定は長さベース）。"""
+    def fake(engine_url, model, texts, batch=32):
+        if calls is not None:
+            calls.append(list(texts))
+        if vec_for:
+            return [vec_for(t) for t in texts]
+        return [[float(len(t)), 0.0] for t in texts]
+    return fake
+
+
+def test_chunk_md_combines_paragraphs_up_to_about_500_chars():
+    import search
+    content = "\n\n".join(["あ" * 200] * 3)
+    chunks = search._chunk_md(content)
+    assert chunks == ["あ" * 200 + "\n\n" + "あ" * 200, "あ" * 200]
+
+
+def test_chunk_md_attaches_heading_to_following_chunk():
+    import search
+    content = "# 見出し\n\n本文1つ目の段落。\n\n本文2つ目の段落。"
+    chunks = search._chunk_md(content)
+    assert len(chunks) == 1
+    assert chunks[0].startswith("# 見出し")
+    assert "本文1つ目の段落。" in chunks[0]
+    assert "本文2つ目の段落。" in chunks[0]
+
+
+def test_chunk_md_produces_no_empty_chunks():
+    import search
+    assert search._chunk_md("") == []
+    assert search._chunk_md("\n\n\n\n   \n\n") == []
+
+
+def test_update_vectors_second_call_only_embeds_new_fragments(monkeypatch):
+    # create_soul直後のsoul_dirには既定生成ファイル群(identity.md等)があるため、
+    # まず1回全部片付けてから「新規分だけ」の差分動作を検証する。
+    import search, soul
+    sid = _sid()
+    calls = []
+    monkeypatch.setattr(search.embed, "embed_texts_batched", _fake_embed_batched(calls=calls))
+    cfg = {"engine_url": "http://127.0.0.1:11434", "model": "m"}
+    search.update_vectors(sid, cfg)  # 既定ファイル群を先に埋め込み切る
+    calls.clear()
+
+    soul.write_file(sid, "wiki/話題A.md", "本文その1。ここに文章がある。")
+    result1 = search.update_vectors(sid, cfg)
+    assert result1 == {"done": 1, "pending": 0}
+    assert len(calls) == 1
+
+    # 何も変わっていない2回目呼び出し = 新規embed呼び出しなし
+    result2 = search.update_vectors(sid, cfg)
+    assert result2 == {"done": 0, "pending": 0}
+    assert len(calls) == 1
+
+    # 新規ファイル追加分だけ埋め込まれる
+    soul.write_file(sid, "wiki/話題B.md", "本文その2。別の文章がある。")
+    result3 = search.update_vectors(sid, cfg)
+    assert result3 == {"done": 1, "pending": 0}
+    assert len(calls) == 2
+
+
+def test_update_vectors_cache_hit_skips_embed_call(monkeypatch):
+    import search, soul
+    sid = _sid()
+    calls = []
+    monkeypatch.setattr(search.embed, "embed_texts_batched", _fake_embed_batched(calls=calls))
+    cfg = {"engine_url": "http://127.0.0.1:11434", "model": "m"}
+    search.update_vectors(sid, cfg)  # 既定ファイル群を先に埋め込み切る
+    calls.clear()
+
+    soul.write_file(sid, "wiki/A.md", "重複するテキスト内容です")
+    search.update_vectors(sid, cfg)
+    assert len(calls) == 1
+    calls.clear()
+
+    # 全く同じ内容の別ファイル = 内容ハッシュが一致しキャッシュヒットするはず
+    soul.write_file(sid, "wiki/B.md", "重複するテキスト内容です")
+    result = search.update_vectors(sid, cfg)
+    assert result == {"done": 1, "pending": 0}
+    assert len(calls) == 0  # embed_texts_batchedは呼ばれていない（キャッシュヒット）
+
+
+def test_update_vectors_model_change_discards_and_reembeds(monkeypatch):
+    import search, soul
+    sid = _sid()
+    calls = []
+    monkeypatch.setattr(search.embed, "embed_texts_batched", _fake_embed_batched(calls=calls))
+    search.update_vectors(sid, {"engine_url": "u", "model": "model-1"})  # 既定ファイル群
+    calls.clear()
+
+    soul.write_file(sid, "wiki/A.md", "内容A")
+    result1 = search.update_vectors(sid, {"engine_url": "u", "model": "model-1"})
+    assert result1 == {"done": 1, "pending": 0}
+    assert len(calls) == 1
+    calls.clear()
+
+    # モデル名が変わればvectors/emb_cacheごと全破棄——既存ファイル分も含めて丸ごと再埋め込み
+    total_fragments = len(search._collect_fragments(soul.soul_dir(sid)))
+    result2 = search.update_vectors(sid, {"engine_url": "u", "model": "model-2"})
+    assert result2 == {"done": total_fragments, "pending": 0}
+    assert len(calls) == 1
+
+
+def test_update_vectors_removes_vectors_for_deleted_fragments(monkeypatch):
+    import search, soul
+    sid = _sid()
+    soul.write_file(sid, "wiki/A.md", "内容A")
+    soul.write_file(sid, "wiki/B.md", "内容B")
+    monkeypatch.setattr(search.embed, "embed_texts_batched", _fake_embed_batched())
+    cfg = {"engine_url": "u", "model": "m"}
+    search.update_vectors(sid, cfg)
+
+    con = __import__("sqlite3").connect(search._db_path(sid))
+    keys_before = {r[0] for r in con.execute("SELECT doc_key FROM vectors")}
+    con.close()
+    assert any(k.startswith("wiki/B.md#") for k in keys_before)
+
+    os.remove(os.path.join(soul.soul_dir(sid), "wiki", "B.md"))
+    result = search.update_vectors(sid, cfg)
+    assert result == {"done": 0, "pending": 0}
+
+    con = __import__("sqlite3").connect(search._db_path(sid))
+    keys_after = {r[0] for r in con.execute("SELECT doc_key FROM vectors")}
+    con.close()
+    assert not any(k.startswith("wiki/B.md#") for k in keys_after)
+    assert any(k.startswith("wiki/A.md#") for k in keys_after)
+
+
+def test_update_vectors_should_stop_halts_at_batch_boundary(monkeypatch):
+    import search, soul
+    sid = _sid()
+    calls = []
+    monkeypatch.setattr(search.embed, "embed_texts_batched", _fake_embed_batched(calls=calls))
+    search.update_vectors(sid, {"engine_url": "u", "model": "m"})  # 既定ファイル群を先に片付ける
+    calls.clear()
+
+    for i in range(5):
+        soul.write_file(sid, f"wiki/話題{i}.md", f"内容その{i}番目のテキストです")
+    monkeypatch.setattr(search, "_EMBED_BATCH", 2)
+
+    state = {"n": 1}
+
+    def should_stop():
+        state["n"] -= 1
+        return state["n"] < 0
+
+    result = search.update_vectors(
+        sid, {"engine_url": "u", "model": "m"}, should_stop=should_stop)
+
+    assert len(calls) == 1  # 最初のバッチ(2件)だけ処理され、2バッチ目の直前で停止
+    assert result == {"done": 2, "pending": 3}
+
+
+def test_update_vectors_swallows_embed_exception_and_returns_partial_result(monkeypatch):
+    import search, soul
+    sid = _sid()
+    monkeypatch.setattr(search.embed, "embed_texts_batched", _fake_embed_batched())
+    search.update_vectors(sid, {"engine_url": "u", "model": "m"})  # 既定ファイル群を先に片付ける
+    soul.write_file(sid, "wiki/A.md", "内容A")
+
+    def raising(engine_url, model, texts, batch=32):
+        raise OSError("ollama not running")
+
+    monkeypatch.setattr(search.embed, "embed_texts_batched", raising)
+    result = search.update_vectors(sid, {"engine_url": "u", "model": "m"})
+    assert result == {"done": 0, "pending": 1}
+
+
+def test_semantic_search_ranks_by_cosine_similarity(monkeypatch):
+    import search, soul
+
+    def vec_for(text):
+        return [1.0, 0.0] if "A" in text else [0.0, 1.0]
+
+    sid = _sid()
+    soul.write_file(sid, "wiki/A.md", "テキストA")
+    soul.write_file(sid, "wiki/B.md", "テキストB")
+    monkeypatch.setattr(search.embed, "embed_texts_batched", _fake_embed_batched(vec_for=vec_for))
+    search.update_vectors(sid, {"engine_url": "u", "model": "m"})
+
+    # 既定ファイル群にも"A"という文字が含まれない前提で、queryに最も近いのはwiki/A.mdのはず
+    results = search.semantic_search(sid, [1.0, 0.0], limit=1)
+    assert results[0]["source"] == "wiki/A.md"
+    assert results[0]["score"] == 1.0
+
+
+def test_semantic_search_returns_empty_when_no_vectors_built():
+    import search
+    sid = _sid()
+    assert search.semantic_search(sid, [1.0, 0.0]) == []
+
+
+def test_update_vectors_reembeds_changed_chunk_same_key(monkeypatch):
+    """同じdoc_key（=同じ位置のチャンク）でも内容が変わったら再埋め込みされること。
+    wikiは追記・書き換えが日常のため、これが無いと編集後も古いベクトルで検索され続ける
+    （Task 2レビューで発見された編集追随の穴・2026-08-03）。"""
+    import embed
+    import search
+    import soul as soul_mod
+    sid = soul_mod.create_soul("編集追随テスト", "コア")
+    soul_mod.write_file(sid, "wiki/対象.md", "最初の内容で埋める")
+
+    calls = []
+
+    def fake_batched(engine_url, model, texts, batch=32):
+        calls.append(list(texts))
+        return [[1.0, 0.0] for _ in texts]
+
+    monkeypatch.setattr(embed, "embed_texts_batched", fake_batched)
+    cfg = {"enabled": True, "engine_url": "http://x", "model": "m1"}
+    search.update_vectors(sid, cfg)
+    n_first = sum(len(c) for c in calls)
+    assert n_first >= 1
+
+    # 内容を書き換える（doc_keyは同じ位置のまま）
+    soul_mod.write_file(sid, "wiki/対象.md", "書き換えた新しい内容")
+    calls.clear()
+    search.update_vectors(sid, cfg)
+    embedded = [t for c in calls for t in c]
+    assert any("書き換えた新しい内容" in t for t in embedded), \
+        "内容変更が再埋め込みされていない（古いベクトルが残る）"

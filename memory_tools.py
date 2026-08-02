@@ -9,8 +9,8 @@ import re
 
 import config as config_mod
 import pdf_render as pdf_render_mod
+import recall as recall_mod
 import roles as roles_mod
-import search as search_mod
 import soul as soul_mod
 import websearch
 import workspace as workspace_mod
@@ -698,8 +698,9 @@ def execute(soul_id, call, cfg=None):
             return {"ok": True, "op": tool,
                     "detail": body if body else "（ファイルが存在しないか空）"}
         if tool == "search_memory":
-            search_mod.ensure_index(soul_id)
-            hits = search_mod.search(soul_id, call.get("query", ""))
+            # recall.hybrid_searchはembedding有効時にRRF融合（字面＋意味）を通す。
+            # 無効・失敗時はsearch_mod.search()と同じ結果になる（recall.py参照）。
+            hits = recall_mod.hybrid_search(cfg, soul_id, call.get("query", ""))
             return {"ok": True, "op": tool, "detail": _format_search_hits(hits)}
         if tool == "save_lesson":
             day = datetime.date.today().isoformat()

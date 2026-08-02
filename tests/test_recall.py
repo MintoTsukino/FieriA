@@ -429,3 +429,198 @@ def test_recency_factor_decay_shape():
     assert abs(recall._recency_factor(60) - 0.5) < 1e-6
     assert abs(recall._recency_factor(120) - 0.25) < 1e-6
     assert recall._recency_factor(None) == 1.0
+
+
+# --- RRF融合（セマンティック検索・2026-08-03 Task3）---
+# 設計判断2: score = Σ 1/(60+rank)（両リストに出る断片は加算）。
+
+def test_norm_snippet_key_strips_fts_decoration_and_matches_plain_text():
+    """字面snippet（search.pyのsnippet()装飾「」…付き）と意味snippet（装飾無しの
+    生テキスト）が同じ内容を指していれば、正規化後は同じキーになること。"""
+    import recall
+    fts_snippet = "…あ「インベントリ」UIの話をした…"
+    plain_snippet = "あインベントリUIの話をした"
+    assert recall._norm_snippet_key(fts_snippet) == recall._norm_snippet_key(plain_snippet)
+
+
+def test_norm_snippet_key_handles_none():
+    import recall
+    assert recall._norm_snippet_key(None) == ""
+
+
+def test_rrf_fuse_adds_scores_for_fragment_appearing_in_both_lists():
+    """両方のランキングに出る断片（source＋正規化snippetキー一致）はスコアが加算され、
+    片方にしか出ない断片より上位に来ること。"""
+    import recall
+    literal = [
+        {"source": "a.md", "snippet": "同じ断片のテキストです"},
+        {"source": "b.md", "snippet": "字面だけのヒットです"},
+    ]
+    semantic = [
+        {"source": "c.md", "snippet": "意味だけのヒットです", "score": 0.9},
+        {"source": "a.md", "snippet": "同じ断片のテキストです", "score": 0.8},
+    ]
+
+    fused = recall._rrf_fuse(literal, semantic)
+    sources = [h.get("source") for h, _ in fused]
+
+    assert sources[0] == "a.md"
+    a_score = dict((h.get("source"), s) for h, s in fused)["a.md"]
+    assert abs(a_score - (1.0 / 61 + 1.0 / 62)) < 1e-9
+
+
+def test_rrf_fuse_keeps_fragments_present_in_only_one_list():
+    import recall
+    literal = [{"source": "a.md", "snippet": "字面のみ"}]
+    semantic = [{"source": "b.md", "snippet": "意味のみ", "score": 0.5}]
+
+    fused = recall._rrf_fuse(literal, semantic)
+    sources = sorted(h.get("source") for h, _ in fused)
+
+    assert sources == ["a.md", "b.md"]
+
+
+# --- _hybrid_hits: embedding有効/無効・失敗時のフォールバック ---
+
+def test_hybrid_hits_falls_back_to_literal_when_embedding_disabled():
+    import recall, search, soul
+    sid = _sid()
+    soul.write_file(sid, "wiki/x.md", "インベントリの話をした")
+    search.ensure_index(sid)
+    cfg = {"embedding": {"enabled": False}}
+
+    hits = recall._hybrid_hits(cfg, sid, ["インベントリ"], "インベントリの話、覚えてる？")
+
+    assert hits and hits[0]["source"] == "wiki/x.md"
+
+
+def test_hybrid_hits_does_not_call_embed_query_when_disabled(monkeypatch):
+    import recall, search, soul
+    sid = _sid()
+    soul.write_file(sid, "wiki/x.md", "インベントリの話をした")
+    search.ensure_index(sid)
+    cfg = {"embedding": {"enabled": False}}
+    called = []
+    monkeypatch.setattr(recall.embed_mod, "embed_query",
+                         lambda *a, **kw: called.append(1))
+
+    recall._hybrid_hits(cfg, sid, ["インベントリ"], "インベントリの話、覚えてる？")
+
+    assert called == []
+
+
+def test_hybrid_hits_falls_back_to_literal_when_embed_query_raises(monkeypatch):
+    import recall, search, soul
+    sid = _sid()
+    soul.write_file(sid, "wiki/x.md", "インベントリの話をした")
+    search.ensure_index(sid)
+    cfg = {"embedding": {"enabled": True, "engine_url": "http://x", "model": "m"}}
+
+    def boom(*a, **kw):
+        raise RuntimeError("engine down")
+    monkeypatch.setattr(recall.embed_mod, "embed_query", boom)
+
+    hits = recall._hybrid_hits(cfg, sid, ["インベントリ"], "インベントリの話、覚えてる？")
+
+    assert hits and hits[0]["source"] == "wiki/x.md"
+
+
+def test_hybrid_hits_fuses_semantic_only_fragment_when_embedding_enabled(monkeypatch):
+    """字面では拾えない断片が、意味検索経由でRRF融合の結果に含まれること。"""
+    import recall, search, soul
+    sid = _sid()
+    soul.write_file(sid, "wiki/字面のみ.md", "プロジェクト管理の見直しについて話した")
+    search.ensure_index(sid)
+    cfg = {"embedding": {"enabled": True, "engine_url": "http://x", "model": "m"}}
+    monkeypatch.setattr(recall.embed_mod, "embed_query", lambda *a, **kw: [0.1, 0.2])
+    monkeypatch.setattr(
+        recall.search_mod, "semantic_search",
+        lambda soul_id, qvec, limit=8: [
+            {"source": "wiki/意味のみ.md", "snippet": "食事の支度をたくさんした", "score": 0.9}])
+
+    hits = recall._hybrid_hits(cfg, sid, ["プロジェクト管理"], "食事なに食べた？")
+    sources = [h["source"] for h in hits]
+
+    assert "wiki/字面のみ.md" in sources
+    assert "wiki/意味のみ.md" in sources
+
+
+def test_build_recall_block_includes_semantic_only_hit_when_embedding_enabled(monkeypatch):
+    """build_recall_block自体もembedding有効時にRRF融合の恩恵を受けること（設計判断2の
+    出口テスト）。"""
+    import recall, search, soul
+    sid = _sid()
+    soul.write_file(sid, "wiki/UI談義.md", "きょうはインベントリUIの話をみんとちゃんとした。")
+    search.ensure_index(sid)
+    cfg = {"auto_recall": {"enabled": True, "max_hits": 3},
+           "embedding": {"enabled": True, "engine_url": "http://x", "model": "m"}}
+    monkeypatch.setattr(recall.embed_mod, "embed_query", lambda *a, **kw: [0.1])
+    monkeypatch.setattr(
+        recall.search_mod, "semantic_search",
+        lambda soul_id, qvec, limit=8: [
+            {"source": "wiki/意味のみ.md", "snippet": "食事の支度をたくさんした", "score": 0.9}])
+
+    block = recall.build_recall_block(cfg, sid, "インベントリの話、覚えてる？")
+
+    assert "wiki/意味のみ.md" in block
+
+
+# --- hybrid_search: memory_tools.search_memoryが通る同じ融合経路 ---
+
+def test_hybrid_search_returns_literal_only_when_disabled():
+    import recall, search, soul
+    sid = _sid()
+    soul.write_file(sid, "wiki/x.md", "インベントリの話をした")
+    search.ensure_index(sid)
+    cfg = {"embedding": {"enabled": False}}
+
+    hits = recall.hybrid_search(cfg, sid, "インベントリ")
+
+    assert hits and hits[0]["source"] == "wiki/x.md"
+
+
+def test_hybrid_search_does_not_call_embed_query_when_disabled(monkeypatch):
+    import recall, search, soul
+    sid = _sid()
+    soul.write_file(sid, "wiki/x.md", "インベントリの話をした")
+    search.ensure_index(sid)
+    cfg = {"embedding": {"enabled": False}}
+    called = []
+    monkeypatch.setattr(recall.embed_mod, "embed_query",
+                         lambda *a, **kw: called.append(1))
+
+    recall.hybrid_search(cfg, sid, "インベントリ")
+
+    assert called == []
+
+
+def test_hybrid_search_falls_back_when_embed_query_raises(monkeypatch):
+    import recall, search, soul
+    sid = _sid()
+    soul.write_file(sid, "wiki/x.md", "インベントリの話をした")
+    search.ensure_index(sid)
+    cfg = {"embedding": {"enabled": True, "engine_url": "http://x", "model": "m"}}
+    monkeypatch.setattr(recall.embed_mod, "embed_query",
+                         lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("down")))
+
+    hits = recall.hybrid_search(cfg, sid, "インベントリ")
+
+    assert hits and hits[0]["source"] == "wiki/x.md"
+
+
+def test_hybrid_search_fuses_semantic_hits_when_enabled(monkeypatch):
+    import recall, search, soul
+    sid = _sid()
+    soul.write_file(sid, "wiki/字面のみ.md", "プロジェクト管理の見直しについて話した")
+    search.ensure_index(sid)
+    cfg = {"embedding": {"enabled": True, "engine_url": "http://x", "model": "m"}}
+    monkeypatch.setattr(recall.embed_mod, "embed_query", lambda *a, **kw: [0.1])
+    monkeypatch.setattr(
+        recall.search_mod, "semantic_search",
+        lambda soul_id, qvec, limit=8: [
+            {"source": "wiki/意味のみ.md", "snippet": "食事の支度をした", "score": 0.9}])
+
+    hits = recall.hybrid_search(cfg, sid, "プロジェクト管理")
+    sources = [h["source"] for h in hits]
+
+    assert "wiki/意味のみ.md" in sources

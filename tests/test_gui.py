@@ -1871,3 +1871,197 @@ def test_save_settings_tts_speed_clamps_above_max():
     bridge = gui.Bridge()
     bridge.save_settings({"tts": {"speed": 9.9}})
     assert bridge._cfg["tts"]["speed"] == 2.0
+
+
+# --- セマンティック検索: 設定配線（embedding）・接続テスト・背景インデクサ ---
+# docs/plans/2026-08-03-semantic-recall.md Task3。search.pyへの実HTTPは
+# gui.search_mod.update_vectors/gui.embed_mod.embed_textsをmonkeypatchして遮断する。
+
+def test_boot_includes_embedding_settings():
+    import gui
+    bridge = gui.Bridge()
+    bridge._cfg["embedding"] = {"enabled": True, "engine_url": "http://x", "model": "m"}
+    data = bridge.boot()
+    assert data["embedding"] == {"enabled": True, "engine_url": "http://x", "model": "m"}
+
+
+def test_get_settings_includes_embedding():
+    import gui
+    bridge = gui.Bridge()
+    bridge._cfg["embedding"] = {"enabled": True, "engine_url": "http://x", "model": "m"}
+    data = bridge.get_settings()
+    assert data["embedding"] == {"enabled": True, "engine_url": "http://x", "model": "m"}
+
+
+def test_save_settings_confirms_embedding_types():
+    """JS側からの値の型は保証されないため、ここでbool/str確定させる
+    （tts/auto_recallと同じ流儀）。"""
+    import gui
+    bridge = gui.Bridge()
+
+    result = bridge.save_settings(
+        {"embedding": {"enabled": "yes", "engine_url": 123, "model": None}})
+
+    assert bridge._cfg["embedding"] == {"enabled": True, "engine_url": "123", "model": ""}
+    assert result["embedding"] == bridge._cfg["embedding"]
+
+
+def test_save_settings_persists_embedding_across_reload():
+    import gui
+    import config as config_mod
+    bridge = gui.Bridge()
+
+    bridge.save_settings(
+        {"embedding": {"enabled": True, "engine_url": "http://127.0.0.1:11434", "model": "m"}})
+
+    reloaded = config_mod.load_config()
+    assert reloaded["embedding"] == {
+        "enabled": True, "engine_url": "http://127.0.0.1:11434", "model": "m"}
+
+
+def test_embedding_test_returns_ok_true_on_success(monkeypatch):
+    import gui
+    bridge = gui.Bridge()
+    bridge._cfg["embedding"] = {"enabled": True, "engine_url": "http://x", "model": "m"}
+    captured = {}
+
+    def fake_embed_texts(engine_url, model, texts):
+        captured["args"] = (engine_url, model, texts)
+        return [[0.1]]
+
+    monkeypatch.setattr(gui.embed_mod, "embed_texts", fake_embed_texts)
+
+    result = bridge.embedding_test()
+
+    assert result == {"ok": True}
+    assert captured["args"] == ("http://x", "m", ["接続テスト"])
+
+
+def test_embedding_test_returns_friendly_error_on_failure(monkeypatch):
+    import gui
+    bridge = gui.Bridge()
+    bridge._cfg["embedding"] = {"enabled": True, "engine_url": "http://x", "model": "m"}
+
+    def boom(*a, **kw):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(gui.embed_mod, "embed_texts", boom)
+
+    result = bridge.embedding_test()
+
+    assert result["ok"] is False
+    assert "接続できない" in result["error"]
+
+
+def test_start_embedding_indexer_noop_during_tests():
+    """FIERIA_TESTING時は起動しない（Schedulerの前例と同じ構造的な遮断）。"""
+    import gui
+    assert os.environ.get("FIERIA_TESTING") == "1"
+    bridge = gui.Bridge()
+    bridge._cfg["embedding"] = {"enabled": True, "engine_url": "http://x", "model": "m"}
+    called = []
+    orig = gui.search_mod.update_vectors
+    gui.search_mod.update_vectors = lambda *a, **kw: called.append(a)
+    try:
+        bridge._start_embedding_indexer("some-soul")
+        import time
+        time.sleep(0.05)
+    finally:
+        gui.search_mod.update_vectors = orig
+    assert called == []
+
+
+def test_start_embedding_indexer_noop_when_disabled(monkeypatch):
+    import gui
+    bridge = gui.Bridge()
+    bridge._cfg["embedding"] = {"enabled": False}
+    monkeypatch.delenv("FIERIA_TESTING", raising=False)
+    called = []
+    orig = gui.search_mod.update_vectors
+    gui.search_mod.update_vectors = lambda *a, **kw: called.append(a)
+    try:
+        bridge._start_embedding_indexer("some-soul")
+        import time
+        time.sleep(0.05)
+    finally:
+        gui.search_mod.update_vectors = orig
+    assert called == []
+
+
+def test_start_embedding_indexer_noop_when_soul_id_missing(monkeypatch):
+    import gui
+    bridge = gui.Bridge()
+    bridge._cfg["embedding"] = {"enabled": True, "engine_url": "http://x", "model": "m"}
+    monkeypatch.delenv("FIERIA_TESTING", raising=False)
+    called = []
+    orig = gui.search_mod.update_vectors
+    gui.search_mod.update_vectors = lambda *a, **kw: called.append(a)
+    try:
+        bridge._start_embedding_indexer(None)
+        bridge._start_embedding_indexer("")
+        import time
+        time.sleep(0.05)
+    finally:
+        gui.search_mod.update_vectors = orig
+    assert called == []
+
+
+def test_start_embedding_indexer_starts_thread_and_suppresses_duplicate(monkeypatch):
+    """実行中に同じsoul_idへ再度呼んでも多重起動しない（多重起動フラグの検証）。
+    FIERIA_TESTINGを一時的に外し、実際にスレッドを起動させて確認する。"""
+    import threading
+    import time
+    import gui
+    bridge = gui.Bridge()
+    bridge._cfg["embedding"] = {"enabled": True, "engine_url": "http://x", "model": "m"}
+    monkeypatch.delenv("FIERIA_TESTING", raising=False)
+    calls = []
+    started = threading.Event()
+    release = threading.Event()
+
+    def fake_update_vectors(soul_id, cfg_embedding):
+        calls.append(soul_id)
+        started.set()
+        release.wait(timeout=2)
+        return {"done": 0, "pending": 0}
+
+    orig = gui.search_mod.update_vectors
+    gui.search_mod.update_vectors = fake_update_vectors
+    try:
+        bridge._start_embedding_indexer("soul-a")
+        assert started.wait(timeout=2), "スレッドが時間内に開始しなかった"
+        bridge._start_embedding_indexer("soul-a")  # 実行中の多重起動は無視される
+        release.set()
+        time.sleep(0.1)
+    finally:
+        gui.search_mod.update_vectors = orig
+
+    assert calls == ["soul-a"]
+    assert "soul-a" not in bridge._indexer_running
+
+
+def test_save_settings_restarts_embedding_indexer():
+    """save_settings後にconfig更新後のactive_soulでインデクサ再起動が試みられること
+    （FIERIA_TESTING下では実際には起動しないが、呼び出し自体は行われることを
+    _start_embedding_indexerをmonkeypatchして確認する）。"""
+    import gui
+    bridge = gui.Bridge()
+    calls = []
+    bridge._start_embedding_indexer = lambda soul_id: calls.append(soul_id)
+
+    bridge.save_settings({"embedding": {"enabled": True, "engine_url": "http://x", "model": "m"}})
+
+    assert calls == [bridge._cfg.get("active_soul")]
+
+
+def test_switch_soul_restarts_embedding_indexer_for_new_soul():
+    import gui
+    import soul
+    bridge = gui.Bridge()
+    sid = soul.create_soul("インデクサ再起動テスト")
+    calls = []
+    bridge._start_embedding_indexer = lambda soul_id: calls.append(soul_id)
+
+    bridge.switch_soul(sid)
+
+    assert calls == [sid]

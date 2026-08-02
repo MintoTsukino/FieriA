@@ -14,6 +14,7 @@ FTSはtrigramトークナイザのため文まるごとのクエリではヒッ�
 import datetime
 import re
 
+import embed as embed_mod
 import search as search_mod
 import soul as soul_mod
 
@@ -82,14 +83,17 @@ def _source_age_days(soul_id, source):
         return None
 
 
-def _ranked_hits(soul_id, keywords):
+def _literal_hits(soul_id, keywords):
     """キーワードごとにsearch_mod.searchを呼びマージする。ランクは単純なヒット回数では
     なく「ヒットしたキーワードの文字数合計」を使う——ストップワード除外だけでは拾い
     きれない一般的な短い語（2文字）が、弁別力の高い長いキーワードと同じ重みで
     max_hits枠を奪うのを防ぐため（長い語＝より具体的＝より関連性が高いと仮定する）。
     キーワードは長い順に処理するため、同点時はその出現順が保たれる
     （Pythonのsortは安定ソート）。search.pyの戻り値にはFTS由来かLIKEフォールバック
-    由来かを区別するフィールドが無いため、その優先付けはここでは行わない。"""
+    由来かを区別するフィールドが無いため、その優先付けはここでは行わない。
+    鮮度補正は掛けない（RRF融合の入力にも使う「素の字面ランキング」を返す関数の
+    ため、鮮度補正は_apply_recencyへ切り出した——セマンティック検索の2026-08-03追加時に
+    _ranked_hitsから分離）。戻り値は(hit, weight)のリスト、重み降順ソート済み。"""
     search_mod.ensure_index(soul_id)
     seen = {}
     order = []
@@ -101,16 +105,115 @@ def _ranked_hits(soul_id, keywords):
                 seen[key] = {"hit": h, "weight": 0}
                 order.append(key)
             seen[key]["weight"] += weight
-    # 新しさ補正: ソースごとの経過日数から係数を求めて重みに乗算する。
-    # 経過日数の取得はソース単位でキャッシュ（同一ファイルから複数断片が出るため）。
+    order.sort(key=lambda k: -seen[k]["weight"])
+    return [(seen[k]["hit"], seen[k]["weight"]) for k in order]
+
+
+def _apply_recency(soul_id, hits_with_scores):
+    """[(hit, score), ...] にソースごとの新しさ補正係数を乗算し、降順に並べ替えた
+    hitのリストを返す（_literal_hitsの素のランキング・RRF融合後のランキング
+    どちらにも使う共通処理）。経過日数の取得はソース単位でキャッシュ
+    （同一ファイルから複数断片が出るため）。"""
     age_cache = {}
-    for k in order:
-        src = seen[k]["hit"].get("source", "")
+    scored = []
+    for hit, score in hits_with_scores:
+        src = hit.get("source", "")
         if src not in age_cache:
             age_cache[src] = _recency_factor(_source_age_days(soul_id, src))
-        seen[k]["weight"] *= age_cache[src]
-    order.sort(key=lambda k: -seen[k]["weight"])
-    return [seen[k]["hit"] for k in order]
+        scored.append((hit, score * age_cache[src]))
+    scored.sort(key=lambda p: -p[1])
+    return [h for h, _ in scored]
+
+
+def _ranked_hits(soul_id, keywords):
+    """字面のみのランキング（embedding無効時・失敗時の従来経路）。
+    _literal_hits（重み計算）→_apply_recency（新しさ補正）の合成。"""
+    return _apply_recency(soul_id, _literal_hits(soul_id, keywords))
+
+
+RRF_K = 60
+SEMANTIC_LIMIT = 8
+
+# RRF融合の断片同一性判定用の正規化（設計判断2）。字面snippet（search.pyの
+# snippet()装飾——「」で囲みヒット周辺40字窓）と意味snippet（search.pyの
+# チャンク先頭200字、装飾なし）は抽出窓が異なるため完全一致は保証できない。
+# 「」…や空白を取り除いた先頭だけを鍵にする——ログ1行=1断片のように両側の
+# 粒度が一致するケース（本来のRRFが効くべき主要ケース）は実質一致して拾える一方、
+# mdの長文チャンクのように窓がズレるケースは「加算を逃す」だけの安全側の劣化に
+# 留まる（誤って無関係な断片を同一視して二重加算するより安全、という判断）。
+_NORM_STRIP_RE = re.compile(r"[「」…\s]+")
+_NORM_KEY_CHARS = 30
+
+
+def _norm_snippet_key(snippet):
+    return _NORM_STRIP_RE.sub("", snippet or "")[:_NORM_KEY_CHARS]
+
+
+def _rrf_fuse(literal_hits, semantic_hits):
+    """字面ヒットと意味ヒットをRRF（Reciprocal Rank Fusion）で融合する
+    （設計判断2）。score = Σ 1/(60+rank)（rankは1始まり）。両リストに現れる断片
+    （sourceと正規化snippetキーが一致）はスコアが加算される。
+    戻り値は(hit, rrf_score)のリスト（スコア降順）。"""
+    scores = {}
+    reps = {}
+    order = []
+
+    def _accumulate(hits):
+        for rank, h in enumerate(hits, start=1):
+            key = (h.get("source"), _norm_snippet_key(h.get("snippet")))
+            if key not in scores:
+                scores[key] = 0.0
+                reps[key] = h
+                order.append(key)
+            scores[key] += 1.0 / (RRF_K + rank)
+
+    _accumulate(literal_hits)
+    _accumulate(semantic_hits)
+    order.sort(key=lambda k: -scores[k])
+    return [(reps[k], scores[k]) for k in order]
+
+
+def _hybrid_hits(cfg, soul_id, keywords, user_text):
+    """embedding有効時は字面（_literal_hits）と意味（search_mod.semantic_search）を
+    RRFで融合し、新しさ補正を乗算して返す。embedding無効時は従来の_ranked_hits
+    （キーワード重みのみ）へそのまま委譲する（既存の会話・テストへの影響を出さない）。
+    埋め込みクエリ化・意味検索いずれかが失敗した場合も、字面のみの結果へ静かに
+    フォールバックする（会話を壊さない設計・Global Constraints）。"""
+    embedding_cfg = (cfg or {}).get("embedding", {}) if cfg else {}
+    if not embedding_cfg.get("enabled"):
+        return _ranked_hits(soul_id, keywords)
+    literal_pairs = _literal_hits(soul_id, keywords)
+    try:
+        qvec = embed_mod.embed_query(
+            embedding_cfg.get("engine_url", ""), embedding_cfg.get("model", ""), user_text)
+        semantic_hits = search_mod.semantic_search(soul_id, qvec, limit=SEMANTIC_LIMIT)
+    except Exception:
+        return _apply_recency(soul_id, literal_pairs)
+    literal_hits = [h for h, _ in literal_pairs]
+    fused = _rrf_fuse(literal_hits, semantic_hits)
+    return _apply_recency(soul_id, fused)
+
+
+def hybrid_search(cfg, soul_id, query, limit=8):
+    """明示検索（memory_tools.search_memoryツール）用のハイブリッド検索。
+    build_recall_blockのRRF融合ロジックを再利用しつつ、キーワード抽出ではなく
+    query文字列そのものをFTS検索・埋め込みクエリの両方にそのまま使う
+    （明示検索はユーザーが選んだ語をそのまま渡す想定で、recallのキーワード抽出＝
+    複数語の重み付けマージとは前提が違うため）。embedding無効・失敗時は
+    search_mod.search()の結果をそのまま返す（従来動作）。"""
+    search_mod.ensure_index(soul_id)
+    literal_hits = search_mod.search(soul_id, query, limit=limit)
+    embedding_cfg = (cfg or {}).get("embedding", {}) if cfg else {}
+    if not embedding_cfg.get("enabled"):
+        return literal_hits
+    try:
+        qvec = embed_mod.embed_query(
+            embedding_cfg.get("engine_url", ""), embedding_cfg.get("model", ""), query)
+        semantic_hits = search_mod.semantic_search(soul_id, qvec, limit=SEMANTIC_LIMIT)
+    except Exception:
+        return literal_hits
+    fused = _rrf_fuse(literal_hits, semantic_hits)
+    return [h for h, _ in fused][:limit]
 
 
 def _today_log_len(soul_id):
@@ -216,7 +319,7 @@ def build_recall_block(cfg, soul_id, user_text):
         keywords = extract_keywords(user_text)
         if not keywords:
             return ""
-        hits = _ranked_hits(soul_id, keywords)
+        hits = _hybrid_hits(cfg, soul_id, keywords, user_text)
         exclude_today = _should_exclude_today_log(cfg, soul_id)
         body = _format_hits(hits, max_hits, exclude_today, soul_id=soul_id)
     except Exception:

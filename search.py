@@ -15,14 +15,32 @@ wiki/sacred）と logs/*.jsonl（1エントリ=1行）。index.sqlite自身と"b
 _files_stateテーブルに保存する。
 
 例外は全てここで握って空リスト/無処理にする（会話を壊さない設計書§8-3と同じ思想）。
+
+--- ベクトル索引（セマンティック検索・2026-08-03追加） ---
+
+FTS5の索引（docs/_docs_raw/_files_state）とは完全に独立したテーブル群
+（vectors/emb_cache/_emb_meta）を同じindex.sqliteに持つ。_ensure_index_innerの
+DROP対象には含めない（全再構築方式のFTSと、差分埋め込み方式のベクトルが
+同じファイルの中で共存する設計。docs/plans/2026-08-03-semantic-recall.md 参照）。
+
+- vectors: 断片1件=1行。doc_key = "{source}#{チャンク連番}"
+- emb_cache: 内容ハッシュ(sha1)→ベクトルの永続キャッシュ。同一内容の断片が
+  複数箇所にあっても・モデルが同じ限りOllama呼び出しは1回で済む
+- _emb_meta: 最後にベクトルを構築したときのモデル名。configのモデルと不一致に
+  なったらvectors/emb_cacheを全破棄して作り直す（次元・埋め込み空間の混在防止）
 """
+import hashlib
 import json
 import os
+import re
 import sqlite3
+import struct
 
+import embed
 import soul as soul_mod
 
 INDEX_FILENAME = "index.sqlite"
+_EMBED_BATCH = 32
 
 
 def _db_path(soul_id):
@@ -213,5 +231,227 @@ def search(soul_id, query, limit=8):
         finally:
             con.close()
         return results
+    except Exception:
+        return []
+
+
+# --- ベクトル索引（セマンティック検索） ---
+
+_BLANK_LINE_RE = re.compile(r"\n\s*\n")
+
+
+def _chunk_md(content, target=500):
+    """mdの本文を空行区切りの段落に分け、目安target字になるまで結合してチャンク化する。
+    見出し行（#始まり）は単独チャンクにせず、次に来る非見出し段落と結合し、
+    そのチャンクの先頭に付ける（文脈保持——見出しなしの断片だけ渡すと何の話か
+    分からなくなるため）。空チャンクは出さない。"""
+    paragraphs = [p.strip() for p in _BLANK_LINE_RE.split(content or "") if p.strip()]
+    chunks = []
+    current = []
+    current_len = 0
+    pending_heading = None
+
+    for para in paragraphs:
+        if para.startswith("#"):
+            if current:
+                chunks.append("\n\n".join(current))
+                current = []
+                current_len = 0
+            pending_heading = para
+            continue
+        if current and current_len + len(para) > target:
+            chunks.append("\n\n".join(current))
+            current = []
+            current_len = 0
+        if not current and pending_heading:
+            current.append(pending_heading)
+            current_len += len(pending_heading)
+            pending_heading = None
+        current.append(para)
+        current_len += len(para)
+
+    if current:
+        chunks.append("\n\n".join(current))
+    elif pending_heading:
+        # 見出しの直後に本文が続かないまま文書が終わる場合、見出しだけでも捨てない
+        chunks.append(pending_heading)
+
+    return chunks
+
+
+def _iter_fragments(full_path, rel_path):
+    """update_vectors用の断片列挙。(doc_key, source, content)を返す。
+    mdは_chunk_mdで段落チャンクへ分割、logsは_log_docsそのまま(1行=1断片、既存の
+    粒度を流用)。FTS用の_iter_docsとは独立した関数（FTS側は無変更のため触らない）。"""
+    if rel_path.startswith("logs/") and rel_path.endswith(".jsonl"):
+        for idx, doc in enumerate(_log_docs(full_path, rel_path)):
+            yield f"{rel_path}#{idx}", rel_path, doc["content"]
+    elif rel_path.endswith(".md"):
+        doc = _md_doc(full_path, rel_path)
+        if doc:
+            for idx, chunk in enumerate(_chunk_md(doc["content"])):
+                yield f"{rel_path}#{idx}", rel_path, chunk
+
+
+def _pack_vec(vec):
+    return struct.pack(f"<{len(vec)}f", *vec)
+
+
+def _unpack_vec(blob):
+    n = len(blob) // 4
+    return list(struct.unpack(f"<{n}f", blob))
+
+
+def _ensure_vector_tables(con):
+    # 編集追随のためvectorsは断片の内容ハッシュも持つ（同じdoc_keyでも内容が変われば
+    # 再埋め込みする）。旧スキーマ（content_hash無し）を見つけたら作り直す
+    # （この機能はまだ未リリースのため移行処理は不要・破棄で足りる）。
+    try:
+        con.execute("SELECT content_hash FROM vectors LIMIT 1")
+    except sqlite3.OperationalError:
+        con.execute("DROP TABLE IF EXISTS vectors")
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS vectors "
+        "(doc_key TEXT PRIMARY KEY, source TEXT, snippet TEXT, "
+        "content_hash TEXT, vec BLOB)")
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS emb_cache "
+        "(content_hash TEXT PRIMARY KEY, model TEXT, vec BLOB)")
+    con.execute("CREATE TABLE IF NOT EXISTS _emb_meta (model TEXT)")
+
+
+def _collect_fragments(base_dir):
+    """soul_dir配下の現在の断片を{doc_key: (source, content)}として返す
+    （空文字の断片は除外。ensure_index同様_target_filesを流用）。"""
+    candidates = {}
+    for rel in _target_files(base_dir):
+        full = os.path.join(base_dir, rel)
+        for doc_key, source, content in _iter_fragments(full, rel):
+            if content and content.strip():
+                candidates[doc_key] = (source, content)
+    return candidates
+
+
+def update_vectors(soul_id, cfg_embedding, should_stop=None):
+    """未ベクトル断片を差分で埋め込む。モデル名がconfigと異なればvectors/emb_cacheを
+    全破棄してから作り直す。emb_cacheヒットは即登録（Ollama呼び出し無し）、未ヒットは
+    embed.embed_texts_batchedで_EMBED_BATCH件ずつ呼ぶ（should_stopはバッチ境界=次の
+    Ollama呼び出しの直前でだけ確認する）。例外（Ollama未起動等）は握って、その時点までの
+    途中結果を返す（doneは今回処理できた断片数、pendingは残数）。
+    消えた断片（ファイル削除・編集で今回チャンク化に現れなかったdoc_key）のvectors行は
+    今回の走査で削除する（記憶の削除・編集への追随）。"""
+    done = 0
+    pending = 0
+    try:
+        base_dir = soul_mod.soul_dir(soul_id)
+        if not os.path.isdir(base_dir):
+            return {"done": 0, "pending": 0}
+        model = (cfg_embedding or {}).get("model", "")
+        engine_url = (cfg_embedding or {}).get("engine_url", "")
+
+        con = sqlite3.connect(_db_path(soul_id))
+        try:
+            _ensure_vector_tables(con)
+
+            row = con.execute("SELECT model FROM _emb_meta LIMIT 1").fetchone()
+            if row is None or row[0] != model:
+                con.execute("DELETE FROM vectors")
+                con.execute("DELETE FROM emb_cache")
+                con.execute("DELETE FROM _emb_meta")
+                con.execute("INSERT INTO _emb_meta(model) VALUES (?)", (model,))
+                con.commit()
+
+            candidates = _collect_fragments(base_dir)
+            candidate_keys = set(candidates.keys())
+            existing = {r[0]: r[1] for r in con.execute(
+                "SELECT doc_key, content_hash FROM vectors")}
+
+            stale = set(existing) - candidate_keys
+            if stale:
+                con.executemany(
+                    "DELETE FROM vectors WHERE doc_key = ?", [(k,) for k in stale])
+                con.commit()
+
+            # 「無い」だけでなく「内容が変わった」（同じ位置のチャンクの書き換え・追記）
+            # も対象にする——編集後に古いベクトルで検索され続けるのを防ぐ
+            missing = []
+            for k in candidates:
+                h = hashlib.sha1(candidates[k][1].encode("utf-8")).hexdigest()
+                if k not in existing or existing[k] != h:
+                    missing.append(k)
+            need_embed_keys = []
+            for key in missing:
+                source, content = candidates[key]
+                content_hash = hashlib.sha1(content.encode("utf-8")).hexdigest()
+                cached = con.execute(
+                    "SELECT vec FROM emb_cache WHERE content_hash = ? AND model = ?",
+                    (content_hash, model)).fetchone()
+                if cached:
+                    con.execute(
+                        "INSERT OR REPLACE INTO vectors"
+                        "(doc_key, source, snippet, content_hash, vec) "
+                        "VALUES (?,?,?,?,?)",
+                        (key, source, content[:200], content_hash, cached[0]))
+                    done += 1
+                else:
+                    need_embed_keys.append(key)
+            con.commit()
+
+            i = 0
+            while i < len(need_embed_keys):
+                if should_stop and should_stop():
+                    break
+                batch_keys = need_embed_keys[i:i + _EMBED_BATCH]
+                batch_contents = [candidates[k][1] for k in batch_keys]
+                try:
+                    vecs = embed.embed_texts_batched(
+                        engine_url, model, batch_contents, batch=_EMBED_BATCH)
+                except Exception:
+                    break
+                for key, vec in zip(batch_keys, vecs):
+                    source, content = candidates[key]
+                    content_hash = hashlib.sha1(content.encode("utf-8")).hexdigest()
+                    vec_blob = _pack_vec(vec)
+                    con.execute(
+                        "INSERT OR REPLACE INTO emb_cache(content_hash, model, vec) "
+                        "VALUES (?,?,?)",
+                        (content_hash, model, vec_blob))
+                    con.execute(
+                        "INSERT OR REPLACE INTO vectors"
+                        "(doc_key, source, snippet, content_hash, vec) "
+                        "VALUES (?,?,?,?,?)",
+                        (key, source, content[:200], content_hash, vec_blob))
+                    done += 1
+                con.commit()
+                i += _EMBED_BATCH
+
+            pending = len(missing) - done
+        finally:
+            con.close()
+    except Exception:
+        pass
+    return {"done": done, "pending": pending}
+
+
+def semantic_search(soul_id, query_vec, limit=8):
+    """vectors全行とquery_vecのコサイン類似度で上位limit件を返す
+    ([{"source","snippet","score"}, ...])。vectorsが空・未構築・例外は[]。"""
+    try:
+        db_path = _db_path(soul_id)
+        if not os.path.isfile(db_path):
+            return []
+        con = sqlite3.connect(db_path)
+        try:
+            rows = con.execute("SELECT source, snippet, vec FROM vectors").fetchall()
+        finally:
+            con.close()
+        if not rows:
+            return []
+        scored = [
+            {"source": source, "snippet": snippet,
+             "score": embed.cosine(query_vec, _unpack_vec(vec_blob))}
+            for source, snippet, vec_blob in rows]
+        scored.sort(key=lambda r: r["score"], reverse=True)
+        return scored[: int(limit)]
     except Exception:
         return []
