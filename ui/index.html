@@ -2683,24 +2683,37 @@ function renderMarkdownToHtml(raw) {
     return text;
   }
 
-  // boot()のllm_summary（{provider,label,model,reasoning_effort}）から表示を更新する。
+  // boot()のllm_summary（{provider,label,model,reasoning_effort,bound_soul}）から表示を更新する。
   // llm_summary自体が無い/空文字だらけでも modelLabelText 側でフォールバックするため壊れない。
+  // bound_soulが立っていれば「このSOUL専用」であることをツールチップに明示する
+  // （サイドバーのモデルメニューはグローバル設定を編集するだけで、紐付け中のSOULの
+  // 会話には効かないため——SOULごとのプロバイダ紐付けTask2の役割分離）。
   function applyModelSummary(summary) {
     $("model-current").textContent = "モデル";
-    $("model-current").title = modelLabelText(
-      summary && summary.label, summary && summary.model, summary && summary.reasoning_effort) + "｜クリックで切り替え";
+    var text = modelLabelText(
+      summary && summary.label, summary && summary.model, summary && summary.reasoning_effort);
+    if (summary && summary.bound_soul) text += "（このSOUL専用）";
+    $("model-current").title = text + "｜クリックで切り替え";
   }
 
-  // get_settings()/save_settings()の戻り値（{llm, provider_labels, ...}）形式から表示を更新する。
+  // get_settings()/save_settings()の戻り値（{llm, provider_labels, soul_llm, ...}）形式から
+  // 表示を更新する。現在アクティブなSOUL(state.active_soul)がsoul_llmで紐付け済みなら、
+  // 編集した(かもしれない)グローバル設定ではなく紐付け先プロバイダの実効値を表示する
+  // （サイドバーでグローバル設定を変えても、紐付け中のSOULの会話には効かないため）。
   function applyModelFromSettings(settings) {
     var llm = (settings && settings.llm) || {};
     var providers = llm.providers || {};
     var labels = (settings && settings.provider_labels) || {};
-    var current = providers[llm.provider] || {};
+    var soulLlm = (settings && settings.soul_llm) || {};
+    var bound = state.active_soul ? (soulLlm[state.active_soul] || {}).provider : null;
+    var isBound = !!(bound && providers[bound]);
+    var effectiveProvider = isBound ? bound : llm.provider;
+    var current = providers[effectiveProvider] || {};
     applyModelSummary({
-      label: labels[llm.provider] || llm.provider || "",
+      label: labels[effectiveProvider] || effectiveProvider || "",
       model: current.model || "",
       reasoning_effort: current.reasoning_effort || "",
+      bound_soul: isBound,
     });
   }
 
@@ -3168,6 +3181,53 @@ function renderMarkdownToHtml(raw) {
       row.appendChild(name);
       var btns = document.createElement("div");
       btns.className = "btns";
+      // SOULごとのLLMプロバイダ紐付け（Task2）: state.settings未ロード時
+      // （設定タブを一度も開かずサイドバーのSOUL切替経由でrenderSoulListが呼ばれた場合）は
+      // provider_labels/llm.providers/soul_llmが無いため、selectそのものを描画しない
+      // （壊れる要素を出さずスキップ——設定タブを開けば以後は描画される）。
+      if (state.settings) {
+        var providers = (state.settings.llm || {}).providers || {};
+        var labels = state.settings.provider_labels || {};
+        var soulLlm = state.settings.soul_llm || {};
+        var modelSelect = document.createElement("select");
+        modelSelect.className = "soul-model-select";
+        modelSelect.title = "このSOULが使うプロバイダ（未指定はグローバル設定に従う）";
+        modelSelect.style.flex = "0 0 auto";
+        modelSelect.style.width = "auto";
+        var globalOpt = document.createElement("option");
+        globalOpt.value = "";
+        globalOpt.textContent = "グローバル設定に従う";
+        modelSelect.appendChild(globalOpt);
+        Object.keys(providers).forEach(function (name) {
+          var opt = document.createElement("option");
+          opt.value = name;
+          opt.textContent = labels[name] || name;
+          modelSelect.appendChild(opt);
+        });
+        var boundProvider = (soulLlm[s.id] || {}).provider || "";
+        var hasBound = Array.prototype.some.call(modelSelect.options, function (o) {
+          return o.value === boundProvider;
+        });
+        modelSelect.value = hasBound ? boundProvider : "";
+        modelSelect.addEventListener("change", function () {
+          var nextSoulLlm = JSON.parse(JSON.stringify(state.settings.soul_llm || {}));
+          var newVal = modelSelect.value;
+          if (newVal) {
+            nextSoulLlm[s.id] = { provider: newVal };
+          } else {
+            delete nextSoulLlm[s.id];
+          }
+          window.pywebview.api.save_settings({ soul_llm: nextSoulLlm }).then(function (data) {
+            state.settings = data;
+            renderSoulList();
+            applyModelFromSettings(data);
+            showToast("SOULのモデル紐付けを保存した");
+          }).catch(function (err) {
+            showToast("保存に失敗した: " + err, "error");
+          });
+        });
+        btns.appendChild(modelSelect);
+      }
       if (s.id !== state.active_soul) {
         var swBtn = document.createElement("button");
         swBtn.className = "ghost soul-switch-btn";
