@@ -279,6 +279,15 @@ DEFAULT_CONFIG = {
     # ため、Web側のime-mode相当は効かず、gui.Bridge.ensure_ime_japaneseがWin32 API
     # で切り替える。ime-mode廃止の代替なので既定ON（他のオプトイン設定とは逆）。
     "ime_auto_ja": True,
+    # 読み上げ（AivisSpeech/VOICEVOX互換HTTPエンジン）。既定OFF（エンジン未導入ユーザーが
+    # 大半のため）。engine_urlはAivisSpeech既定（VOICEVOXなら:50021）。speakerはスタイルID
+    # （/speakersのstyles[].id）、speedは0.5〜2.0（tts.py参照）。
+    "tts": {
+        "enabled": False,
+        "engine_url": "http://127.0.0.1:10101",
+        "speaker": 0,
+        "speed": 1.0,
+    },
 }
 
 # LLM返信完了時の効果音。ファイルは ui/se/ に同梱（値はそのファイル名、""=鳴らさない）
@@ -325,6 +334,12 @@ def load_config():
     for key, value in DEFAULT_CONFIG["pet_pos"].items():
         if key not in cfg["pet_pos"]:
             cfg["pet_pos"][key] = value
+            changed = True
+    # ttsも同様のフィールド単位補完（fact_layer/auto_recallと同じ入れ子補完パターン）。
+    cfg.setdefault("tts", {})
+    for key, value in DEFAULT_CONFIG["tts"].items():
+        if key not in cfg["tts"]:
+            cfg["tts"][key] = value
             changed = True
     # scheduled_jobsも同様：将来ジョブが増えた時に既存configへ欠けたキーだけ補完する
     # （既存の値は上書きしない。fact_layerと同じ入れ子補完パターン）。

@@ -18,6 +18,7 @@ import memory_tools
 import prompt as prompt_mod
 import roles as roles_mod
 import soul as soul_mod
+import tts as tts_mod
 import wrapup as wrapup_mod
 from engine import Engine
 from env import delete_key, load_env, set_key
@@ -207,6 +208,9 @@ class Bridge:
             "pet_character": self._cfg.get("pet_character", "konoha"),
             "pet_pos": self._cfg.get("pet_pos", {"right": 20, "bottom": 92}),
             "reply_se": self._cfg.get("reply_se", "se-poko.mp3"),
+            # 読み上げ設定。JS側が返信完了フックでenabledを見てSEと切り替えるため、
+            # replySeと同じ理由でbootに含める（ui/index.htmlの起動時state同期）。
+            "tts": self._cfg.get("tts", copy.deepcopy(config_mod.DEFAULT_CONFIG["tts"])),
             # 今日の会話ログ（表示専用の復元用）。engine.messagesには入れない＝
             # LLMへ渡す会話コンテキストは増やさない（設計判断: 今日の発言量が多いほど
             # APIコストが増えるトレードオフを許容するかは未確定のため、画面表示のみに留める）。
@@ -466,6 +470,7 @@ class Bridge:
             "streaming": self._cfg.get("streaming", True),
             "reply_se": self._cfg.get("reply_se", "se-poko.mp3"),
             "ime_auto_ja": self._cfg.get("ime_auto_ja", True),
+            "tts": self._cfg.get("tts", copy.deepcopy(config_mod.DEFAULT_CONFIG["tts"])),
         }
 
     def save_settings(self, payload):
@@ -532,10 +537,91 @@ class Bridge:
         if "ime_auto_ja" in payload:
             # auto_role_switch等と同様、JS側からの型を保証せずここでbool確定させる。
             self._cfg["ime_auto_ja"] = bool(payload["ime_auto_ja"])
+        if "tts" in payload:
+            # auto_recallと同じ入れ子丸ごと置き換え＋型確定パターン。speaker/speedは
+            # int()/float()変換失敗時に既定へフォールバック、speedはさらに0.5〜2.0へ
+            # クランプする（tts.synthesizeのspeedScaleへそのまま渡る値のため、
+            # エンジン側の許容範囲外を防ぐ）。既存値は見ず丸ごと置き換え——JS側は
+            # 常にtts設定全体を送ってくる想定（llm.pyと同じ全体置き換え方針）。
+            t = payload["tts"] or {}
+            try:
+                speaker = int(t.get("speaker", 0))
+            except (TypeError, ValueError):
+                speaker = 0
+            try:
+                speed = float(t.get("speed", 1.0))
+            except (TypeError, ValueError):
+                speed = 1.0
+            speed = max(0.5, min(2.0, speed))
+            self._cfg["tts"] = {
+                "enabled": bool(t.get("enabled", False)),
+                "engine_url": str(t.get("engine_url", "")),
+                "speaker": speaker,
+                "speed": speed,
+            }
         config_mod.save_config(self._cfg)
         self._env = load_env()
         self._ensure_engine()
         return self.get_settings()
+
+    # --- 読み上げ（AivisSpeech/VOICEVOX互換） ---
+    def tts_speak(self, text):
+        """読み上げブリッジ。tts.enabledがFalseなら即{"ok": False}を返す
+        （HTTPは一切発火しない）。有効ならデーモンスレッドでtts.speak(cfg_tts, text)を
+        呼び即{"ok": True}を返す（結果は待たない——reply_seの「鳴らして終わり」と
+        同じ非同期発火）。連打時は直前の再生が新しい再生で置き換わる
+        （winsound.PlaySound(SND_MEMORY|SND_ASYNC)の挙動任せ・スレッド管理不要、
+        tts.play_wav_asyncのdocstring参照）。"""
+        cfg_tts = self._cfg.get("tts", {})
+        if not cfg_tts.get("enabled"):
+            return {"ok": False}
+        threading.Thread(target=tts_mod.speak, args=(cfg_tts, text), daemon=True).start()
+        return {"ok": True}
+
+    def tts_stop(self):
+        """再生停止。tts.stop自体は例外を出さない実装だが、他のstop系ブリッジ
+        （stop_turn等）と同じ「失敗しても会話を壊さない」方針に揃えて念のため握る。"""
+        try:
+            tts_mod.stop()
+        except Exception:
+            pass
+        return {"ok": True}
+
+    def tts_list_speakers(self):
+        """現在のtts.engine_urlで話者一覧を取得する。接続失敗・タイムアウト・
+        JSON崩れ等の生の例外はUIへ漏らさず、平易な文言に変換する
+        （render_pdf等の既存「例外を握ってok:False」パターンに倣う）。"""
+        cfg_tts = self._cfg.get("tts", {})
+        try:
+            speakers = tts_mod.list_speakers(cfg_tts.get("engine_url", ""))
+            return {"ok": True, "speakers": speakers}
+        except Exception:
+            return {
+                "ok": False,
+                "error": "エンジンに接続できない（AivisSpeech/VOICEVOXが起動しているか確認）",
+            }
+
+    def tts_test(self, text="読み上げのテストだよ"):
+        """設定画面のテスト再生用。tts_speakと異なりenabledを無視して即合成・再生し、
+        結果を同期で返す。Global Constraints記載どおり、テスト再生だけは失敗を
+        呼び出し側（設定画面）に表示してよいため、speak()のように例外を握りつぶさず
+        {"ok": False, "error": ...}へ変換して返す。"""
+        cfg_tts = self._cfg.get("tts", {})
+        try:
+            prepared = tts_mod.prepare_text(text)
+            if not prepared:
+                return {"ok": False, "error": "テキストが空"}
+            wav = tts_mod.synthesize(
+                cfg_tts.get("engine_url", ""),
+                prepared,
+                cfg_tts.get("speaker", 0),
+                speed=cfg_tts.get("speed", 1.0),
+            )
+            if not tts_mod.play_wav_async(wav):
+                return {"ok": False, "error": "この環境では再生できない（winsound無し）"}
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": f"読み上げ失敗: {e}"}
 
     def ensure_ime_japanese(self):
         """入力欄フォーカス時にIMEを日本語入力（ひらがな）へ切り替える。

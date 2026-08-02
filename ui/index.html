@@ -1224,6 +1224,33 @@
         </div>
       </div>
 
+      <div class="card" id="tts-card">
+        <h3>読み上げ</h3>
+        <div class="toggle-row">
+          <input type="checkbox" id="tts-enabled-checkbox">
+          <label style="min-width:auto;">LLMの返信を音声で読み上げる（ONの間は返信音は鳴らない）</label>
+        </div>
+        <div class="row" style="margin-top:12px;">
+          <label>エンジンURL</label>
+          <input type="text" id="tts-engine-url-input" placeholder="http://127.0.0.1:10101">
+        </div>
+        <div class="hint">AivisSpeech: 127.0.0.1:10101 / VOICEVOX: 127.0.0.1:50021</div>
+        <div class="row" style="margin-top:12px;">
+          <label>話者</label>
+          <select id="tts-speaker-select"><option value="">未取得</option></select>
+          <button class="ghost" id="tts-list-speakers-btn">話者を取得</button>
+        </div>
+        <div class="hint" id="tts-speaker-hint"></div>
+        <div class="row" style="margin-top:12px;">
+          <label>速度</label>
+          <input type="range" id="tts-speed-input" min="0.5" max="2.0" step="0.1">
+          <span id="tts-speed-value" class="value-label">1.0x</span>
+        </div>
+        <div class="row" style="margin-top:12px;">
+          <button class="ghost" id="tts-test-btn">テスト再生</button>
+        </div>
+      </div>
+
       </div>
     </div>
   </div>
@@ -1541,6 +1568,11 @@ function renderMarkdownToHtml(raw) {
     setPetPos(savedPos.right != null ? savedPos.right : 20,
       savedPos.bottom != null ? savedPos.bottom : 92);
     state.replySe = data.reply_se || "";
+    // 読み上げ設定もreplySeと同じ理由（設定画面を開いていなくてもチャット側で判定するため）で
+    // 単独state保持する。SOUL切替の瞬間に前SOULの読み上げが残らないよう、ここでtts_stopも呼ぶ
+    // （区切りボタンと同じfire-and-forget。失敗しても会話を壊さない）。
+    state.tts = data.tts || {};
+    window.pywebview.api.tts_stop().catch(function () {});
 
     var soulObj = state.souls.find(function (s) { return s.id === state.active_soul; });
     $("soul-name-label").textContent = soulObj ? soulObj.name : "SOUL未選択";
@@ -2171,6 +2203,7 @@ function renderMarkdownToHtml(raw) {
   });
   $("break-confirm-btn").addEventListener("click", function () {
     $("break-confirm-modal").classList.remove("open");
+    window.pywebview.api.tts_stop().catch(function () {});  // 区切り後に読み上げが続くのは不自然なため止める
     window.pywebview.api.insert_break().then(function (result) {
       if (!result || !result.ok) return;
       $("chat-log").innerHTML = "";
@@ -2315,7 +2348,12 @@ function renderMarkdownToHtml(raw) {
         return;
       }
       setPetState(petStateAfterTurn(result));
-      playReplySe();
+      // 読み上げONなら発話（SEは鳴らさない・fire-and-forget）、OFFなら従来どおりSE。
+      if (state.tts && state.tts.enabled) {
+        window.pywebview.api.tts_speak(result.reply || "").catch(function () {});
+      } else {
+        playReplySe();
+      }
       var row = addBubble("ai", result.reply || "");
       addOperations(row, result.operations);
       // AIがswitch_roleツールで自分から切り替えていたら、ロールバー表示を更新する
@@ -3458,6 +3496,29 @@ function renderMarkdownToHtml(raw) {
     $("streaming-enabled-checkbox").checked = state.settings.streaming !== false;
     $("reply-se-select").value = state.settings.reply_se || "";
     $("ime-auto-ja-checkbox").checked = state.settings.ime_auto_ja !== false;
+    renderTtsCard();
+  }
+
+  // FieriA拡張: 読み上げカード。話者selectは「取得」ボタンで都度埋めるため、
+  // ここでは値の反映のみ（selectのoptionsは保存済みspeaker idがあってもここでは作らない
+  // ——エンジンから取得した名前が無いと表示できないため。保存値はvalueとして試みに当てるだけ）。
+  function renderTtsCard() {
+    if (!state.settings) return;
+    var tts = state.settings.tts || {};
+    $("tts-enabled-checkbox").checked = tts.enabled === true;
+    $("tts-engine-url-input").value = tts.engine_url || "";
+    var speed = typeof tts.speed === "number" ? tts.speed : 1.0;
+    $("tts-speed-input").value = speed;
+    $("tts-speed-value").textContent = speed.toFixed(1) + "x";
+    var speakerSelect = $("tts-speaker-select");
+    if (speakerSelect.options.length <= 1) {
+      // 話者一覧未取得の間は保存済みIDだけ持つ仮オプションを1つ出しておく（選択済み感を出す）
+      speakerSelect.innerHTML = "";
+      var opt = document.createElement("option");
+      opt.value = String(tts.speaker != null ? tts.speaker : 0);
+      opt.textContent = "未取得（IDのみ: " + opt.value + "）";
+      speakerSelect.appendChild(opt);
+    }
   }
 
   // FieriA拡張: LLM返信完了時のSE。state.replySeはboot()または設定変更時に更新され、
@@ -3527,6 +3588,100 @@ function renderMarkdownToHtml(raw) {
       showToast("IME自動切替の設定を保存した");
     }).catch(function (err) {
       showToast("保存に失敗した: " + err, "error");
+    });
+  });
+
+  // FieriA拡張: 読み上げ設定。save_settingsのttsは入れ子丸ごと置き換え方式
+  // （gui.py save_settings参照）なので、変更するフィールドだけでなく現在の
+  // state.settings.ttsをディープコピーした土台へ上書きして送る
+  // （web-search-checkboxのllm設定と同じ全体置き換えパターン）。
+  function ttsPayloadBase() {
+    return JSON.parse(JSON.stringify(state.settings.tts || {}));
+  }
+
+  function saveTts(tts, successMsg) {
+    window.pywebview.api.save_settings({ tts: tts }).then(function (data) {
+      state.settings = data;
+      state.tts = data.tts || {};
+      renderTtsCard();
+      if (successMsg) showToast(successMsg);
+    }).catch(function (err) {
+      showToast("保存に失敗した: " + err, "error");
+    });
+  }
+
+  $("tts-enabled-checkbox").addEventListener("change", function () {
+    var tts = ttsPayloadBase();
+    tts.enabled = $("tts-enabled-checkbox").checked;
+    saveTts(tts, "読み上げの設定を保存した");
+  });
+
+  $("tts-engine-url-input").addEventListener("change", function () {
+    var tts = ttsPayloadBase();
+    tts.engine_url = $("tts-engine-url-input").value.trim();
+    saveTts(tts, "エンジンURLを保存した");
+  });
+
+  $("tts-speed-input").addEventListener("input", function () {
+    var speed = parseFloat($("tts-speed-input").value) || 1.0;
+    $("tts-speed-value").textContent = speed.toFixed(1) + "x";
+  });
+
+  $("tts-speed-input").addEventListener("change", function () {
+    var tts = ttsPayloadBase();
+    tts.speed = parseFloat($("tts-speed-input").value) || 1.0;
+    saveTts(tts, "速度を保存した");
+  });
+
+  $("tts-speaker-select").addEventListener("change", function () {
+    var tts = ttsPayloadBase();
+    tts.speaker = parseInt($("tts-speaker-select").value, 10) || 0;
+    saveTts(tts, "話者を保存した");
+  });
+
+  $("tts-list-speakers-btn").addEventListener("click", function () {
+    var btn = $("tts-list-speakers-btn");
+    var hint = $("tts-speaker-hint");
+    var select = $("tts-speaker-select");
+    btn.disabled = true;
+    hint.textContent = "取得中…";
+    window.pywebview.api.tts_list_speakers().then(function (res) {
+      btn.disabled = false;
+      if (!res.ok) {
+        hint.textContent = res.error || "取得に失敗した";
+        showToast(res.error || "話者の取得に失敗した", "error");
+        return;
+      }
+      var currentId = String((state.settings.tts || {}).speaker != null ? state.settings.tts.speaker : 0);
+      select.innerHTML = "";
+      (res.speakers || []).forEach(function (speakerEntry) {
+        (speakerEntry.styles || []).forEach(function (style) {
+          var opt = document.createElement("option");
+          opt.value = String(style.id);
+          opt.textContent = speakerEntry.name + "（" + style.name + "）";
+          select.appendChild(opt);
+        });
+      });
+      var hasCurrent = Array.prototype.some.call(select.options, function (o) { return o.value === currentId; });
+      if (hasCurrent) select.value = currentId;
+      hint.textContent = select.options.length ? "" : "話者が見つからなかった";
+    }).catch(function (err) {
+      btn.disabled = false;
+      hint.textContent = "取得に失敗した: " + err;
+    });
+  });
+
+  $("tts-test-btn").addEventListener("click", function () {
+    var btn = $("tts-test-btn");
+    btn.disabled = true;
+    window.pywebview.api.tts_test().then(function (res) {
+      btn.disabled = false;
+      if (!res.ok) {
+        showToast(res.error || "テスト再生に失敗した", "error");
+      }
+    }).catch(function (err) {
+      btn.disabled = false;
+      showToast("テスト再生に失敗した: " + err, "error");
     });
   });
 

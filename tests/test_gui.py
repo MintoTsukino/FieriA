@@ -1612,3 +1612,262 @@ def test_save_settings_rejects_unknown_pet_character():
     b = gui.Bridge()
     b.save_settings({"pet_character": "ドラゴン"})
     assert b._cfg["pet_character"] == "konoha"
+
+
+# --- 読み上げ（AivisSpeech/VOICEVOX互換）ブリッジ ---
+# 2026-08-02追加。docs/plans/2026-08-02-tts-yomiage.md Task 2。
+# tts_speak/tts_stop/tts_list_speakers/tts_testの4メソッドと、save_settings/
+# get_settings/bootのtts配線。tts.pyの実HTTP・実再生には一切触れず、
+# gui.tts_mod（=tts.py）側の関数をmonkeypatchして境界だけを検証する。
+
+def test_tts_speak_disabled_returns_ok_false_without_starting_thread():
+    """tts.enabledがFalseなら、tts.speakが一切呼ばれず（=HTTPも発火せず）
+    即{"ok": False}が返ること。"""
+    import gui
+    bridge = gui.Bridge()
+    bridge._cfg["tts"] = {"enabled": False, "engine_url": "http://x", "speaker": 0, "speed": 1.0}
+    calls = []
+
+    def fake_speak(cfg_tts, text):
+        calls.append((cfg_tts, text))
+
+    import tts as tts_mod
+    orig = tts_mod.speak
+    gui.tts_mod.speak = fake_speak
+    try:
+        result = bridge.tts_speak("こんにちは")
+    finally:
+        gui.tts_mod.speak = orig
+
+    assert result == {"ok": False}
+    assert calls == []
+
+
+def test_tts_speak_enabled_passes_current_tts_cfg_and_text_via_thread():
+    """tts.enabledがTrueなら、デーモンスレッド経由でtts.speak(cfg_tts, text)が
+    呼ばれ、即{"ok": True}が返ること（結果は待たない＝呼び出し自体は非同期）。
+    スレッドの完了はthreading.Eventで待つ（joinで待つのと同義——スレッド関数側で
+    Eventをsetすることで、テストからでも確実に完了を検知できるようにする）。"""
+    import threading
+    import gui
+    bridge = gui.Bridge()
+    tts_cfg = {"enabled": True, "engine_url": "http://127.0.0.1:10101", "speaker": 3, "speed": 1.5}
+    bridge._cfg["tts"] = tts_cfg
+    calls = []
+    done = threading.Event()
+
+    def fake_speak(cfg_tts, text):
+        calls.append((cfg_tts, text))
+        done.set()
+
+    orig = gui.tts_mod.speak
+    gui.tts_mod.speak = fake_speak
+    try:
+        result = bridge.tts_speak("読み上げてほしいテキスト")
+        assert done.wait(timeout=2), "スレッドが時間内に完了しなかった"
+    finally:
+        gui.tts_mod.speak = orig
+
+    assert result == {"ok": True}
+    assert calls == [(tts_cfg, "読み上げてほしいテキスト")]
+
+
+def test_tts_stop_calls_tts_stop_and_returns_ok():
+    import gui
+    bridge = gui.Bridge()
+    calls = []
+    orig = gui.tts_mod.stop
+    gui.tts_mod.stop = lambda: calls.append(True)
+    try:
+        result = bridge.tts_stop()
+    finally:
+        gui.tts_mod.stop = orig
+
+    assert calls == [True]
+    assert result == {"ok": True}
+
+
+def test_tts_stop_swallows_exception_from_tts_stop():
+    """tts.stop自体は通常例外を出さないが、念のため呼び出し側でも握る
+    （他のstop系ブリッジと同じ「失敗しても会話を壊さない」方針に揃える）。"""
+    import gui
+    bridge = gui.Bridge()
+    orig = gui.tts_mod.stop
+
+    def boom():
+        raise RuntimeError("boom")
+
+    gui.tts_mod.stop = boom
+    try:
+        result = bridge.tts_stop()
+    finally:
+        gui.tts_mod.stop = orig
+
+    assert result == {"ok": True}
+
+
+def test_tts_list_speakers_returns_speakers_on_success():
+    import gui
+    bridge = gui.Bridge()
+    bridge._cfg["tts"] = {"enabled": True, "engine_url": "http://127.0.0.1:10101",
+                           "speaker": 0, "speed": 1.0}
+    fake_speakers = [{"name": "つくよみちゃん", "styles": [{"name": "ノーマル", "id": 3}]}]
+    orig = gui.tts_mod.list_speakers
+    captured = {}
+
+    def fake_list_speakers(engine_url):
+        captured["engine_url"] = engine_url
+        return fake_speakers
+
+    gui.tts_mod.list_speakers = fake_list_speakers
+    try:
+        result = bridge.tts_list_speakers()
+    finally:
+        gui.tts_mod.list_speakers = orig
+
+    assert result == {"ok": True, "speakers": fake_speakers}
+    assert captured["engine_url"] == "http://127.0.0.1:10101"
+
+
+def test_tts_list_speakers_returns_friendly_error_on_failure():
+    """接続失敗・タイムアウト・JSON崩れ等、list_speakersが例外を出したら、
+    生の例外ではなく平易な文言に変換して返すこと。"""
+    import gui
+    bridge = gui.Bridge()
+    bridge._cfg["tts"] = {"enabled": True, "engine_url": "http://127.0.0.1:10101",
+                           "speaker": 0, "speed": 1.0}
+    orig = gui.tts_mod.list_speakers
+
+    def boom(engine_url):
+        raise OSError("Connection refused")
+
+    gui.tts_mod.list_speakers = boom
+    try:
+        result = bridge.tts_list_speakers()
+    finally:
+        gui.tts_mod.list_speakers = orig
+
+    assert result["ok"] is False
+    assert "エンジンに接続できない" in result["error"]
+
+
+def test_tts_test_returns_ok_true_on_success():
+    """設定画面のテスト再生: enabledを無視して即合成・再生する。"""
+    import gui
+    bridge = gui.Bridge()
+    bridge._cfg["tts"] = {"enabled": False, "engine_url": "http://127.0.0.1:10101",
+                           "speaker": 2, "speed": 1.0}
+    orig_synth = gui.tts_mod.synthesize
+    orig_play = gui.tts_mod.play_wav_async
+    calls = {}
+
+    def fake_synthesize(engine_url, text, speaker, speed=1.0):
+        calls["synthesize"] = (engine_url, text, speaker, speed)
+        return b"WAVBYTES"
+
+    def fake_play(wav_bytes):
+        calls["play"] = wav_bytes
+        return True
+
+    gui.tts_mod.synthesize = fake_synthesize
+    gui.tts_mod.play_wav_async = fake_play
+    try:
+        result = bridge.tts_test("テスト用テキスト")
+    finally:
+        gui.tts_mod.synthesize = orig_synth
+        gui.tts_mod.play_wav_async = orig_play
+
+    assert result == {"ok": True}
+    assert calls["synthesize"] == ("http://127.0.0.1:10101", "テスト用テキスト", 2, 1.0)
+    assert calls["play"] == b"WAVBYTES"
+
+
+def test_tts_test_returns_ok_false_with_error_on_synth_failure():
+    """テスト再生だけはGlobal Constraintsどおりエラーを表示してよい経路——
+    synthesizeが例外を出したら{"ok": False, "error": ...}に変換されること。"""
+    import gui
+    bridge = gui.Bridge()
+    bridge._cfg["tts"] = {"enabled": False, "engine_url": "http://127.0.0.1:10101",
+                           "speaker": 0, "speed": 1.0}
+    orig_synth = gui.tts_mod.synthesize
+
+    def boom(engine_url, text, speaker, speed=1.0):
+        raise OSError("Connection refused")
+
+    gui.tts_mod.synthesize = boom
+    try:
+        result = bridge.tts_test("テスト用テキスト")
+    finally:
+        gui.tts_mod.synthesize = orig_synth
+
+    assert result["ok"] is False
+    assert result["error"]
+
+
+def test_get_settings_includes_tts_default():
+    import gui
+    bridge = gui.Bridge()
+    settings = bridge.get_settings()
+    assert settings["tts"] == {
+        "enabled": False,
+        "engine_url": "http://127.0.0.1:10101",
+        "speaker": 0,
+        "speed": 1.0,
+    }
+
+
+def test_boot_includes_tts():
+    import gui
+    bridge = gui.Bridge()
+    bridge._cfg["tts"]["speaker"] = 5
+    assert bridge.boot()["tts"]["speaker"] == 5
+
+
+def test_save_settings_persists_tts_and_coerces_types():
+    """enabled=bool・engine_url=str・speaker=int・speed=floatへ型を確定させ、
+    configへ永続化されること（他の設定と同じ「JS側の型を信用しない」原則）。"""
+    import gui
+    import config as config_mod
+    bridge = gui.Bridge()
+
+    result = bridge.save_settings({
+        "tts": {"enabled": True, "engine_url": "http://127.0.0.1:50021",
+                "speaker": "3", "speed": "1.2"},
+    })
+
+    assert result["tts"] == {
+        "enabled": True,
+        "engine_url": "http://127.0.0.1:50021",
+        "speaker": 3,
+        "speed": 1.2,
+    }
+    reloaded = config_mod.load_config()
+    assert reloaded["tts"] == result["tts"]
+
+
+def test_save_settings_tts_speaker_falls_back_to_zero_on_garbage():
+    import gui
+    bridge = gui.Bridge()
+    bridge.save_settings({"tts": {"speaker": "not-a-number"}})
+    assert bridge._cfg["tts"]["speaker"] == 0
+
+
+def test_save_settings_tts_speed_falls_back_to_default_on_garbage():
+    import gui
+    bridge = gui.Bridge()
+    bridge.save_settings({"tts": {"speed": "not-a-number"}})
+    assert bridge._cfg["tts"]["speed"] == 1.0
+
+
+def test_save_settings_tts_speed_clamps_below_min():
+    import gui
+    bridge = gui.Bridge()
+    bridge.save_settings({"tts": {"speed": 0.1}})
+    assert bridge._cfg["tts"]["speed"] == 0.5
+
+
+def test_save_settings_tts_speed_clamps_above_max():
+    import gui
+    bridge = gui.Bridge()
+    bridge.save_settings({"tts": {"speed": 9.9}})
+    assert bridge._cfg["tts"]["speed"] == 2.0
