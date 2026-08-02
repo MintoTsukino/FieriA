@@ -424,3 +424,34 @@ def test_semantic_search_returns_empty_when_no_vectors_built():
     import search
     sid = _sid()
     assert search.semantic_search(sid, [1.0, 0.0]) == []
+
+
+def test_update_vectors_reembeds_changed_chunk_same_key(monkeypatch):
+    """同じdoc_key（=同じ位置のチャンク）でも内容が変わったら再埋め込みされること。
+    wikiは追記・書き換えが日常のため、これが無いと編集後も古いベクトルで検索され続ける
+    （Task 2レビューで発見された編集追随の穴・2026-08-03）。"""
+    import embed
+    import search
+    import soul as soul_mod
+    sid = soul_mod.create_soul("編集追随テスト", "コア")
+    soul_mod.write_file(sid, "wiki/対象.md", "最初の内容で埋める")
+
+    calls = []
+
+    def fake_batched(engine_url, model, texts, batch=32):
+        calls.append(list(texts))
+        return [[1.0, 0.0] for _ in texts]
+
+    monkeypatch.setattr(embed, "embed_texts_batched", fake_batched)
+    cfg = {"enabled": True, "engine_url": "http://x", "model": "m1"}
+    search.update_vectors(sid, cfg)
+    n_first = sum(len(c) for c in calls)
+    assert n_first >= 1
+
+    # 内容を書き換える（doc_keyは同じ位置のまま）
+    soul_mod.write_file(sid, "wiki/対象.md", "書き換えた新しい内容")
+    calls.clear()
+    search.update_vectors(sid, cfg)
+    embedded = [t for c in calls for t in c]
+    assert any("書き換えた新しい内容" in t for t in embedded), \
+        "内容変更が再埋め込みされていない（古いベクトルが残る）"

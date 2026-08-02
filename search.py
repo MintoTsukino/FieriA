@@ -303,9 +303,17 @@ def _unpack_vec(blob):
 
 
 def _ensure_vector_tables(con):
+    # 編集追随のためvectorsは断片の内容ハッシュも持つ（同じdoc_keyでも内容が変われば
+    # 再埋め込みする）。旧スキーマ（content_hash無し）を見つけたら作り直す
+    # （この機能はまだ未リリースのため移行処理は不要・破棄で足りる）。
+    try:
+        con.execute("SELECT content_hash FROM vectors LIMIT 1")
+    except sqlite3.OperationalError:
+        con.execute("DROP TABLE IF EXISTS vectors")
     con.execute(
         "CREATE TABLE IF NOT EXISTS vectors "
-        "(doc_key TEXT PRIMARY KEY, source TEXT, snippet TEXT, vec BLOB)")
+        "(doc_key TEXT PRIMARY KEY, source TEXT, snippet TEXT, "
+        "content_hash TEXT, vec BLOB)")
     con.execute(
         "CREATE TABLE IF NOT EXISTS emb_cache "
         "(content_hash TEXT PRIMARY KEY, model TEXT, vec BLOB)")
@@ -355,15 +363,22 @@ def update_vectors(soul_id, cfg_embedding, should_stop=None):
 
             candidates = _collect_fragments(base_dir)
             candidate_keys = set(candidates.keys())
-            existing_keys = {r[0] for r in con.execute("SELECT doc_key FROM vectors")}
+            existing = {r[0]: r[1] for r in con.execute(
+                "SELECT doc_key, content_hash FROM vectors")}
 
-            stale = existing_keys - candidate_keys
+            stale = set(existing) - candidate_keys
             if stale:
                 con.executemany(
                     "DELETE FROM vectors WHERE doc_key = ?", [(k,) for k in stale])
                 con.commit()
 
-            missing = [k for k in candidates if k not in existing_keys]
+            # 「無い」だけでなく「内容が変わった」（同じ位置のチャンクの書き換え・追記）
+            # も対象にする——編集後に古いベクトルで検索され続けるのを防ぐ
+            missing = []
+            for k in candidates:
+                h = hashlib.sha1(candidates[k][1].encode("utf-8")).hexdigest()
+                if k not in existing or existing[k] != h:
+                    missing.append(k)
             need_embed_keys = []
             for key in missing:
                 source, content = candidates[key]
@@ -373,9 +388,10 @@ def update_vectors(soul_id, cfg_embedding, should_stop=None):
                     (content_hash, model)).fetchone()
                 if cached:
                     con.execute(
-                        "INSERT OR REPLACE INTO vectors(doc_key, source, snippet, vec) "
-                        "VALUES (?,?,?,?)",
-                        (key, source, content[:200], cached[0]))
+                        "INSERT OR REPLACE INTO vectors"
+                        "(doc_key, source, snippet, content_hash, vec) "
+                        "VALUES (?,?,?,?,?)",
+                        (key, source, content[:200], content_hash, cached[0]))
                     done += 1
                 else:
                     need_embed_keys.append(key)
@@ -401,9 +417,10 @@ def update_vectors(soul_id, cfg_embedding, should_stop=None):
                         "VALUES (?,?,?)",
                         (content_hash, model, vec_blob))
                     con.execute(
-                        "INSERT OR REPLACE INTO vectors(doc_key, source, snippet, vec) "
-                        "VALUES (?,?,?,?)",
-                        (key, source, content[:200], vec_blob))
+                        "INSERT OR REPLACE INTO vectors"
+                        "(doc_key, source, snippet, content_hash, vec) "
+                        "VALUES (?,?,?,?,?)",
+                        (key, source, content[:200], content_hash, vec_blob))
                     done += 1
                 con.commit()
                 i += _EMBED_BATCH
