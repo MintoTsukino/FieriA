@@ -2042,8 +2042,10 @@ function renderMarkdownToHtml(raw) {
       chip.className = "turn-status-chip";
       currentThinkingRow.appendChild(chip);
     }
-    chip.textContent = (kind === "memory_write") ? "💾 記憶を書き込み中…" : "🔧 記憶ツールを実行中…";
+    chip.textContent = (kind === "web_search") ? "🔍 Webで検索中…"
+      : (kind === "memory_write") ? "💾 記憶を書き込み中…" : "🔧 記憶ツールを実行中…";
     if (kind === "memory_write") setPetState("writing");
+    if (kind === "web_search") setPetState("thinking");
     scrollChatToBottom();
   };
 

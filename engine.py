@@ -358,9 +358,16 @@ class Engine:
                 # UIへ状態を通知して「無言の間」を可視化する（実機FB 2026-07-23）。
                 # on_statusは表示専用コールバック——例外で会話を壊さない。
                 if calls and on_status:
-                    kind = ("memory_write" if any(
-                        c.get("tool") in memory_tools.MEMORY_WRITE_TOOLS for c in calls)
-                        else "tools")
+                    # 表示の優先順位: 検索 > 書き込み > 汎用。検索は数秒かかるうえ
+                    # 「何をしているか」が最も伝わる情報のため最優先で見せる。
+                    if any(c.get("tool") == "web_search" for c in calls
+                           if isinstance(c, dict)):
+                        kind = "web_search"
+                    elif any(c.get("tool") in memory_tools.MEMORY_WRITE_TOOLS
+                             for c in calls if isinstance(c, dict)):
+                        kind = "memory_write"
+                    else:
+                        kind = "tools"
                     try:
                         on_status(kind)
                     except Exception:

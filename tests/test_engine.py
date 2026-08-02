@@ -1172,3 +1172,47 @@ def test_on_status_called_for_memory_write_tools_and_swallows_exceptions():
     eng3 = engine_mod.Engine({"fact_layer": {"enabled": False}}, llm3, sid)
     eng3.process_turn("やあ", on_status=events3.append)
     assert events3 == []
+
+
+def test_on_status_reports_web_search_kind_with_priority(monkeypatch):
+    """web_searchツールを含むターンはon_status("web_search")——「🔍 検索中」表示用。
+    書き込みツールと同居した場合も検索表示を優先する（検索が先に走り時間も長いため）。
+    2026-08-02追加（実機FB: 検索中に何をしているか見えなかった）。"""
+    import engine as engine_mod
+    import soul as soul_mod
+    import websearch
+    # 実DDG検索へ飛ばさない（テストは実ネットワーク禁止）
+    monkeypatch.setattr(websearch, "search_text",
+                        lambda q, max_results=5: {"ok": True, "results": [], "detail": "0件"})
+    sid = soul_mod.create_soul("検索状態通知テスト", "コア")
+
+    class FakeLLM:
+        def __init__(self, replies):
+            self.replies = list(replies)
+
+        def chat(self, messages):
+            return self.replies.pop(0)
+
+    events = []
+    llm = FakeLLM([
+        '調べるじょ\n```fieria-tool\n{"tool": "web_search", "query": "テスト"}\n```',
+        '結果を見た。回答するじょ',
+    ])
+    eng = engine_mod.Engine({"fact_layer": {"enabled": False},
+                             "llm": {"web_search": True}}, llm, sid)
+    r = eng.process_turn("調べて", on_status=events.append)
+    assert "web_search" in events
+    assert events[0] == "web_search"
+    assert not r.get("stopped")
+
+    # 書き込みツールと同居しても検索が優先される
+    events2 = []
+    llm2 = FakeLLM([
+        '両方やる\n```fieria-tool\n{"tool": "web_search", "query": "テスト"}\n```\n'
+        '```fieria-tool\n{"tool": "save_lesson", "text": "規則"}\n```',
+        'まとめたじょ',
+    ])
+    eng2 = engine_mod.Engine({"fact_layer": {"enabled": False},
+                              "llm": {"web_search": True}}, llm2, sid)
+    eng2.process_turn("調べて覚えて", on_status=events2.append)
+    assert events2[0] == "web_search"
