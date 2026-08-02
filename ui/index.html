@@ -5,6 +5,9 @@
     --bg: #ffffff; --bg2: #f5f5f5; --fg: #1a1a1a; --fg-dim: #777;
     --line: #e0e0e0; --accent: #1a1a1a; --accent-fg: #ffffff; --bubble-user: #1a1a1a; --card-radius: 14px;
     --shadow: 0 4px 16px rgba(0,0,0,.08); --danger: #a33; --overlay: rgba(0,0,0,.35); --code-bg: #e8e8e8;
+    /* テーマ登録制への一般化（2026-08-02）: body font-familyの直書きをここへ集約。
+       既定値は従来のbody font-family値そのまま＝light/darkの見た目は不変。 */
+    --font-main: "Yu Gothic UI", "Meiryo", "Segoe UI", sans-serif;
     /* --- ペット（ドット絵マスコット）配色 --- */
     --pet-body: #ffffff; --pet-ear: #ffffff; --pet-belly: #eef0f3; --pet-cheek: #ffb3c0;
     --pet-eye: #2a2a2a; --pet-outline: rgba(0,0,0,.18);
@@ -20,7 +23,7 @@
   html, body {
     margin: 0; padding: 0; height: 100%;
     background: var(--bg); color: var(--fg);
-    font-family: "Yu Gothic UI", "Meiryo", "Segoe UI", sans-serif;
+    font-family: var(--font-main);
     font-size: 15px;
   }
   #app {
@@ -967,10 +970,7 @@
         <h3>テーマ</h3>
         <div class="row">
           <label>表示</label>
-          <select id="theme-select">
-            <option value="light">ライト</option>
-            <option value="dark">ダーク</option>
-          </select>
+          <select id="theme-select"></select>
         </div>
         <div class="toggle-row" style="margin-top:12px;">
           <input type="checkbox" id="streaming-enabled-checkbox">
@@ -1203,6 +1203,13 @@ function renderMarkdownToHtml(raw) {
 }
 /* MDRENDER_END */
 (function () {
+  // テーマ登録制への一般化（2026-08-02）: 設定のテーマselectはここから動的生成する。
+  // このタスクでは基盤のみ（light/darkの2件）。後続タスクが8案を追記する。
+  var THEMES = [
+    { id: "light", label: "ライト" },
+    { id: "dark", label: "ダーク" },
+  ];
+
   var state = {
     souls: [], roles: [], active_soul: null, active_role: null, fact_layer: null,
     settings: null, theme: "light", pet_enabled: true, pet_skins: {}, replySe: "se-poko.mp3",
@@ -1210,6 +1217,9 @@ function renderMarkdownToHtml(raw) {
 
   function applyTheme(theme) {
     document.documentElement.dataset.theme = theme === "dark" ? "dark" : "light";
+    // 効果レイヤ用フック。THEMESに未実装のid文字列でも生値をそのまま渡す
+    // （light/dark時点ではどのCSSにもマッチしないため無害）。
+    document.body.dataset.themeFx = theme;
   }
 
   var OP_LABELS = {
@@ -3161,8 +3171,21 @@ function renderMarkdownToHtml(raw) {
     });
   });
 
+  function populateThemeSelect() {
+    var sel = $("theme-select");
+    if (sel.dataset.populated === "1") return;
+    THEMES.forEach(function (t) {
+      var opt = document.createElement("option");
+      opt.value = t.id;
+      opt.textContent = t.label;
+      sel.appendChild(opt);
+    });
+    sel.dataset.populated = "1";
+  }
+
   function renderThemeCard() {
     if (!state.settings) return;
+    populateThemeSelect();
     $("theme-select").value = state.settings.theme || "light";
     $("streaming-enabled-checkbox").checked = state.settings.streaming !== false;
     $("reply-se-select").value = state.settings.reply_se || "";

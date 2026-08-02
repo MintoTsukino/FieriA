@@ -1564,3 +1564,31 @@ def test_ensure_ime_japanese_never_raises_when_enabled():
 
     assert isinstance(result, dict)
     assert "ok" in result
+
+
+# --- テーマ登録制への一般化: save_settingsのホワイトリスト正規化 ---
+# 2026-08-02追加。着せ替えテーマ8案（docs/plans/2026-08-02-theme-skins.md）Task 1。
+# themeは自由文字列として保存されていたため、pet_character等と同じくconfig_mod.THEME_IDS
+# によるホワイトリスト正規化を追加した（既知id以外は既定"light"へ倒す）。
+
+
+def test_save_settings_persists_known_theme():
+    import gui
+    import config as config_mod
+    bridge = gui.Bridge()
+
+    result = bridge.save_settings({"theme": "neon"})
+
+    assert result["theme"] == "neon"
+    reloaded = config_mod.load_config()
+    assert reloaded["theme"] == "neon"
+
+
+def test_save_settings_normalizes_unknown_theme_to_light():
+    """改ざん・旧設定の残骸等で未知のtheme値が来ても、既定の"light"へ正規化されること。"""
+    import gui
+    bridge = gui.Bridge()
+
+    result = bridge.save_settings({"theme": "hacker9000"})
+
+    assert result["theme"] == "light"

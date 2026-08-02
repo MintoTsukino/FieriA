@@ -482,7 +482,10 @@ class Bridge:
                     val = str(entry.get("reasoning_effort", "") or "").strip().lower()
                     entry["reasoning_effort"] = val if val in REASONING_EFFORTS else ""
         if "theme" in payload:
-            self._cfg["theme"] = payload["theme"]
+            # pet_character等と同じホワイトリスト正規化。未知の値（改ざん・旧設定の
+            # 残骸等）は既定の"light"へ倒す（config_mod.THEME_IDSが正）。
+            val = payload["theme"]
+            self._cfg["theme"] = val if val in config_mod.THEME_IDS else "light"
         if "wrapup_max_tokens" in payload:
             self._cfg["wrapup_max_tokens"] = payload["wrapup_max_tokens"]
         if "context_limit_tokens" in payload:
