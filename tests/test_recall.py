@@ -398,3 +398,34 @@ def test_format_hits_survives_missing_file(tmp_path):
     hits = [{"source": "wiki/消えた.md", "snippet": "断片"}]
     body = recall._format_hits(hits, 3, exclude_today=False, soul_id=sid)
     assert "[出典: wiki/消えた.md]" in body  # 日付なしでも壊れない
+
+
+# --- 新しさ補正（recencyブースト）——2026-08-03 ---
+# 同程度の字面一致なら最近の記憶を優先する。半減期方式なので、強い一致は
+# 古くても勝てる（新しさで意味の関連を上書きしない）。
+
+def test_ranked_hits_recency_can_flip_weaker_but_fresh_hit(tmp_path):
+    """ブースト無しでは確実に古い方が勝つ条件（古い方が2キーワード・新しい方が1つ）で、
+    90日の鮮度差がランクを逆転させることを検証する。同点の並び運では通らないテスト。"""
+    import os
+    import time as _time
+    import soul as soul_mod
+    sid = soul_mod.create_soul("鮮度テスト", "コア")
+    soul_mod.write_file(sid, "wiki/古い話.md", "りんごケーキをオーブンで焼いた話")
+    soul_mod.write_file(sid, "wiki/新しい話.md", "りんごケーキをまた食べたいという話")
+    old_path = os.path.join(soul_mod.soul_dir(sid), "wiki", "古い話.md")
+    stale = _time.time() - 90 * 86400  # 90日前
+    os.utime(old_path, (stale, stale))
+    hits = recall._ranked_hits(sid, ["りんごケーキ", "オーブン"])
+    sources = [h.get("source") for h in hits]
+    assert "wiki/新しい話.md" in sources and "wiki/古い話.md" in sources
+    # 字面だけなら古い方が重い(11字vs6字)が、鮮度係数(90日≒0.354)で新しい方が勝つ
+    assert sources.index("wiki/新しい話.md") < sources.index("wiki/古い話.md")
+
+
+def test_recency_factor_decay_shape():
+    """半減期60日: 0日=1.0、60日=0.5、120日=0.25。未知(None)は中立1.0。"""
+    assert abs(recall._recency_factor(0) - 1.0) < 1e-6
+    assert abs(recall._recency_factor(60) - 0.5) < 1e-6
+    assert abs(recall._recency_factor(120) - 0.25) < 1e-6
+    assert recall._recency_factor(None) == 1.0

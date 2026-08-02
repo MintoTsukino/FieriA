@@ -59,6 +59,29 @@ def _today_log_source():
     return f"logs/{datetime.date.today().isoformat()}.jsonl"
 
 
+RECENCY_HALFLIFE_DAYS = 60
+
+
+def _recency_factor(age_days):
+    """新しさ補正の係数（半減期方式・2026-08-03）。0日=1.0、60日=0.5、120日=0.25。
+    年齢不明（None）は中立1.0——ファイル欠落等の稀ケースで罰しない。
+    乗算方式なので、字面の強い一致は古くても勝てる（新しさは同格の勝負でだけ効く）。"""
+    if age_days is None:
+        return 1.0
+    return 0.5 ** (age_days / RECENCY_HALFLIFE_DAYS)
+
+
+def _source_age_days(soul_id, source):
+    """記憶ファイルの経過日数。取れなければNone。"""
+    try:
+        import os as _os
+        import time as _time
+        path = _os.path.join(soul_mod.soul_dir(soul_id), *source.split("/"))
+        return max(0.0, (_time.time() - _os.path.getmtime(path)) / 86400.0)
+    except Exception:
+        return None
+
+
 def _ranked_hits(soul_id, keywords):
     """キーワードごとにsearch_mod.searchを呼びマージする。ランクは単純なヒット回数では
     なく「ヒットしたキーワードの文字数合計」を使う——ストップワード除外だけでは拾い
@@ -78,6 +101,14 @@ def _ranked_hits(soul_id, keywords):
                 seen[key] = {"hit": h, "weight": 0}
                 order.append(key)
             seen[key]["weight"] += weight
+    # 新しさ補正: ソースごとの経過日数から係数を求めて重みに乗算する。
+    # 経過日数の取得はソース単位でキャッシュ（同一ファイルから複数断片が出るため）。
+    age_cache = {}
+    for k in order:
+        src = seen[k]["hit"].get("source", "")
+        if src not in age_cache:
+            age_cache[src] = _recency_factor(_source_age_days(soul_id, src))
+        seen[k]["weight"] *= age_cache[src]
     order.sort(key=lambda k: -seen[k]["weight"])
     return [seen[k]["hit"] for k in order]
 
