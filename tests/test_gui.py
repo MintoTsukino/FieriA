@@ -1592,3 +1592,23 @@ def test_save_settings_normalizes_unknown_theme_to_light():
     result = bridge.save_settings({"theme": "hacker9000"})
 
     assert result["theme"] == "light"
+
+
+# --- ペットキャラの選択（組み込み3種＋不正値フォールバック） ---
+# 2026-08-02追加。BUILTIN_PET_SKINS（ui/index.html）のキーと対応する値だけを
+# 受け付け、未知の値は既定コノハへ倒す（存在しないスキンを指したまま保存されると
+# ペットが表示できなくなるため）。
+
+def test_save_settings_accepts_builtin_pet_characters():
+    import gui
+    b = gui.Bridge()
+    for name in ("konoha", "mokora", "suzuna"):
+        b.save_settings({"pet_character": name})
+        assert b._cfg["pet_character"] == name
+
+
+def test_save_settings_rejects_unknown_pet_character():
+    import gui
+    b = gui.Bridge()
+    b.save_settings({"pet_character": "ドラゴン"})
+    assert b._cfg["pet_character"] == "konoha"
