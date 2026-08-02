@@ -32,8 +32,20 @@ WORK = os.path.join(os.path.dirname(HERE), "FieriA-build")   # ビルド作業�
 FINAL = os.path.join(WORK, "dist", "FieriA")                  # 完成品
 
 # 機密走査パターン。ファイル名(小文字化)に対するglobマッチと、ディレクトリ名の完全一致
+# *.jsonlは本アプリが会話ログ・日記をこの拡張子で書く（gui.py/soul.py等）ため、
+# 開発機のfieria_home実データが誤って同梱されていないかの検出に使う（防御の多重化。
+# fieria_home/soulsディレクトリ名の完全一致チェックと二重）。
 SENSITIVE_FILE_GLOBS = [".env", "config.json", "*oauth*", "*.jsonl"]
 SENSITIVE_DIR_NAMES = {".git", "fieria_home", "souls"}
+
+# サードパーティ依存が同梱する、ユーザーデータではない静的パッケージデータへの
+# 例外（誤検知除外）。ddgs→fake_useragentが実際のブラウザシェア統計jsonlを同梱する
+# （公開統計データ・個人情報なし。2026-08-02に内容を実際に確認済み）。
+# パスはPyInstaller onedir配置基準（FINALルートからの相対）で厳密一致のみ許可する
+# （glob等の緩いマッチはしない。新規に増やす際は必ず内容を確認してから追加すること）。
+SAFE_THIRDPARTY_RELPATHS = {
+    os.path.join("_internal", "fake_useragent", "data", "browsers.jsonl"),
+}
 
 
 def run(cmd, cwd=None):
@@ -55,7 +67,11 @@ def scan_confidential(root):
         for f in filenames:
             fl = f.lower()
             if any(fnmatch.fnmatch(fl, pat.lower()) for pat in SENSITIVE_FILE_GLOBS):
-                hits.append(os.path.join(dirpath, f))
+                full = os.path.join(dirpath, f)
+                rel = os.path.relpath(full, root)
+                if rel in SAFE_THIRDPARTY_RELPATHS:
+                    continue
+                hits.append(full)
     return hits
 
 
