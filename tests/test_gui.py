@@ -1602,7 +1602,7 @@ def test_save_settings_normalizes_unknown_theme_to_light():
 def test_save_settings_accepts_builtin_pet_characters():
     import gui
     b = gui.Bridge()
-    for name in ("konoha", "mokora", "suzuna", "hanapo"):
+    for name in ("konoha", "mokora", "suzuna", "hanapo", "nejiro"):
         b.save_settings({"pet_character": name})
         assert b._cfg["pet_character"] == name
 
