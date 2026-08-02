@@ -522,7 +522,7 @@ class Bridge:
         if "pet_character" in payload:
             # 未知の値は既定コノハに倒す（BUILTIN_PET_SKINSのキーと対応）
             val = payload["pet_character"]
-            self._cfg["pet_character"] = val if val in ("konoha", "mokora", "suzuna", "hanapo", "nejiro") else "konoha"
+            self._cfg["pet_character"] = val if val in ("konoha", "mokora", "suzuna", "hanapo", "nejiro", "pachiri") else "konoha"
         if "streaming" in payload:
             self._cfg["streaming"] = bool(payload["streaming"])
         if "reply_se" in payload:
