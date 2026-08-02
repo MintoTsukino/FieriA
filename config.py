@@ -288,6 +288,14 @@ DEFAULT_CONFIG = {
         "speaker": 0,
         "speed": 1.0,
     },
+    # セマンティック検索（連想記憶のハイブリッド化・embed.py参照）。既定OFF（Ollama未導入
+    # ユーザーが大半のため。ONでもOllama不達なら従来の字面検索のみへ静かにフォールバックする）。
+    # engine_urlはOllama既定。modelはみんとちゃん選定2026-08-03（実測形式確認済み）。
+    "embedding": {
+        "enabled": False,
+        "engine_url": "http://127.0.0.1:11434",
+        "model": "hf.co/Qwen/Qwen3-Embedding-0.6B-GGUF:Q8_0",
+    },
 }
 
 # LLM返信完了時の効果音。ファイルは ui/se/ に同梱（値はそのファイル名、""=鳴らさない）
@@ -340,6 +348,12 @@ def load_config():
     for key, value in DEFAULT_CONFIG["tts"].items():
         if key not in cfg["tts"]:
             cfg["tts"][key] = value
+            changed = True
+    # embeddingも同様のフィールド単位補完（tts/auto_recallと同じ入れ子補完パターン）。
+    cfg.setdefault("embedding", {})
+    for key, value in DEFAULT_CONFIG["embedding"].items():
+        if key not in cfg["embedding"]:
+            cfg["embedding"][key] = value
             changed = True
     # scheduled_jobsも同様：将来ジョブが増えた時に既存configへ欠けたキーだけ補完する
     # （既存の値は上書きしない。fact_layerと同じ入れ子補完パターン）。
