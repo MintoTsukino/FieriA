@@ -1538,3 +1538,88 @@ def test_skills_index_block_summarizes_beyond_30_skills():
     assert "手順29" in spec
     assert "手順30" not in spec  # 31件目は個別表示されず丸められる
     assert "…他1件（search_memoryで名前を探せる）" in spec
+
+
+# --- web_search（全プロバイダWeb検索・Task2）---
+
+def test_web_search_dispatch_returns_formatted_results(monkeypatch):
+    import memory_tools as mt
+    import websearch
+    sid = _sid()
+    fake_results = [{"title": "タイトル", "href": "https://example.com", "body": "本文抜粋"}]
+    monkeypatch.setattr(
+        websearch, "search_text",
+        lambda query, max_results=5: {"ok": True, "results": fake_results, "detail": "1件"})
+    r = mt.execute(sid, {"tool": "web_search", "query": "猫の飼い方"})
+    assert r["ok"] is True
+    assert r["op"] == "web_search"
+    assert "タイトル" in r["detail"]
+    assert "https://example.com" in r["detail"]
+    assert "本文抜粋" in r["detail"]
+
+
+def test_web_search_dispatch_zero_results_uses_fixed_detail(monkeypatch):
+    import memory_tools as mt
+    import websearch
+    sid = _sid()
+    monkeypatch.setattr(
+        websearch, "search_text",
+        lambda query, max_results=5: {"ok": True, "results": [], "detail": "0件"})
+    r = mt.execute(sid, {"tool": "web_search", "query": "猫の飼い方"})
+    assert r["ok"] is True
+    assert r["detail"] == "検索結果0件"
+
+
+def test_web_search_dispatch_failure_passes_through_detail(monkeypatch):
+    import memory_tools as mt
+    import websearch
+    sid = _sid()
+    monkeypatch.setattr(
+        websearch, "search_text",
+        lambda query, max_results=5: {"ok": False, "results": [], "detail": "検索に失敗しました: boom"})
+    r = mt.execute(sid, {"tool": "web_search", "query": "猫の飼い方"})
+    assert r["ok"] is False
+    assert r["op"] == "web_search"
+    assert r["detail"] == "検索に失敗しました: boom"
+
+
+def test_web_search_dispatch_rejects_empty_query():
+    import memory_tools as mt
+    sid = _sid()
+    r = mt.execute(sid, {"tool": "web_search", "query": "   "})
+    assert r["ok"] is False
+    assert r["op"] == "web_search"
+
+
+def test_web_search_is_feedback_tool():
+    import memory_tools as mt
+    assert "web_search" in mt.FEEDBACK_TOOLS
+
+
+def test_build_tools_spec_omits_web_search_when_off():
+    import memory_tools as mt
+    cfg = {"llm": {"web_search": False, "provider": "ollama",
+                    "providers": {"ollama": {"type": "ollama"}}}}
+    spec = mt.build_tools_spec(cfg)
+    assert "web_search" not in spec
+
+
+def test_build_tools_spec_omits_web_search_for_gemini():
+    import memory_tools as mt
+    cfg = {"llm": {"web_search": True, "provider": "g",
+                    "providers": {"g": {"type": "gemini"}}}}
+    spec = mt.build_tools_spec(cfg)
+    assert "web_search" not in spec
+
+
+def test_build_tools_spec_includes_web_search_for_non_gemini():
+    import memory_tools as mt
+    cfg = {"llm": {"web_search": True, "provider": "ollama",
+                    "providers": {"ollama": {"type": "ollama"}}}}
+    spec = mt.build_tools_spec(cfg)
+    assert '"tool":"web_search"' in spec
+
+
+def test_web_search_not_in_importer_allowed_tools():
+    import importer
+    assert "web_search" not in importer.ALLOWED_TOOLS

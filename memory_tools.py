@@ -12,13 +12,14 @@ import pdf_render as pdf_render_mod
 import roles as roles_mod
 import search as search_mod
 import soul as soul_mod
+import websearch
 import workspace as workspace_mod
 
 # LLMへ結果を差し戻して再応答させる（他ターンで終わらせない）ツールの集合。
 # engine.pyのツールループがこれを見てread_results相当の差し戻しをするかどうか決める。
 FEEDBACK_TOOLS = {"read_memory", "search_memory", "list_workspace", "read_doc",
                    "read_pdf", "list_reminders", "search_workspace", "describe_tools",
-                   "use_skill"}
+                   "use_skill", "web_search"}
 
 # create_skill/update_skillの入力上限（レビュー指摘・2026-07-22追加）。
 # create_roleのname≤20字/prompt≤500字と同じ「業務層で先に頭打ちする」流儀。
@@ -228,6 +229,8 @@ _TOOL_ONELINERS = {
                     '{"tool":"switch_role","name":"ロール名"}',
     "create_role": '- create_role: 繰り返す仕事の型化提案（同意後に作成） '
                     '{"tool":"create_role","name":"名","prompt":"やること"}',
+    "web_search": '- web_search: Webを検索する。個人情報をクエリに入れない '
+                   '{"tool":"web_search","query":"検索語"}',
     # describe_tools自身の1行（2026-07-22追加: 自己記述が索引から欠落していたため）。
     # _MEMORY_TOOL_NAMES等のリストには入れない（_INDEX_FOOTERで直接埋め込むため）。
     "describe_tools": ('- describe_tools: 索引の一言説明だけで足りない時に詳しい仕様を取りに行く'
@@ -345,6 +348,8 @@ def build_tools_spec(cfg, soul_id=None):
                          "\n".join(_TOOL_ONELINERS[n] for n in _ROLE_TOOL_NAMES) +
                          "\n\n" + _roles_index_block())
         sections.append(role_section)
+    if (cfg.get("llm") or {}).get("web_search") and _current_llm_type(cfg) != "gemini":
+        sections.append("## Web検索\n" + _TOOL_ONELINERS["web_search"])
     sections.append(_skills_index_block(soul_id, cfg))
     sections.append(_INDEX_FOOTER)
     return "\n\n".join(sections)
@@ -475,6 +480,11 @@ _TOOL_DETAILS = {
                         'toolsは配列で複数指定できる。未知のツール名を混ぜても構わない'
                         '（その名前だけ「知らないツール名: X」として返り、他は普通に詳細が返る）。'
                         '結果は次のターンで渡される。'),
+    "web_search": ('{"tool": "web_search", "query": "検索語"}\n'
+                    'キー不要のWeb検索（DuckDuckGo）を行う。最新情報や事実確認が必要なときだけ'
+                    '使うこと。ユーザーの個人情報や文書の内容をクエリに含めないこと。'
+                    '結果は最大5件、各件タイトル/URL/抜粋で返る。0件・検索失敗でも会話は止まらず、'
+                    'その旨が結果として返る。結果は次のターンで渡される。'),
 }
 
 
@@ -772,6 +782,12 @@ def execute(soul_id, call, cfg=None):
             soul_mod.set_name(soul_id, result)
             label = result if result else "（未設定に戻した）"
             return _ok(tool, f"名前を『{label}』に設定した")
+        if tool == "web_search":
+            res = websearch.search_text(call.get("query", ""))
+            if not res["ok"]:
+                return {"ok": False, "op": tool, "detail": res["detail"]}
+            detail = websearch.format_results(res["results"]) if res["results"] else "検索結果0件"
+            return {"ok": True, "op": tool, "detail": detail}
         return {"ok": False, "op": tool or "(不明)", "detail": "未知のツール"}
     except Exception as e:
         return {"ok": False, "op": tool, "detail": f"失敗: {e}"}
