@@ -1267,6 +1267,51 @@ def test_search_memory_still_finds_archived_memory_with_archive_source():
     assert "archive/wiki/古い話題X.md" in r["detail"]
 
 
+# --- search_memoryのハイブリッド経路（セマンティック検索・2026-08-03 Task3）---
+# recall.hybrid_searchを通す配線の確認（embedding無効時は従来どおり・cfgが
+# hybrid_searchへそのまま渡ること）。
+
+def test_search_memory_routes_through_recall_hybrid_search_with_cfg(monkeypatch):
+    import memory_tools as mt
+    import recall
+    import soul
+    sid = _sid()
+    soul.write_file(sid, "wiki/話題.md", "資金のバランスを見直したい話")
+    captured = {}
+
+    def fake_hybrid_search(cfg, soul_id, query, limit=8):
+        captured["cfg"] = cfg
+        captured["soul_id"] = soul_id
+        captured["query"] = query
+        return [{"source": "wiki/話題.md", "snippet": "資金のバランスを見直したい話"}]
+
+    monkeypatch.setattr(recall, "hybrid_search", fake_hybrid_search)
+    cfg = {"embedding": {"enabled": True, "engine_url": "http://x", "model": "m"}}
+
+    r = mt.execute(sid, {"tool": "search_memory", "query": "バランス"}, cfg=cfg)
+
+    assert r["ok"] is True
+    assert captured["cfg"] is cfg
+    assert captured["soul_id"] == sid
+    assert captured["query"] == "バランス"
+    assert "wiki/話題.md" in r["detail"]
+
+
+def test_search_memory_without_cfg_falls_back_to_literal_only():
+    """execute()の第3引数cfgが省略された既存呼び出し（cfg=None）でも、
+    hybrid_search内でNone扱いされ従来の字面検索と同じ結果になること
+    （後方互換：cfgを渡さない旧来の呼び出し元を壊さない）。"""
+    import memory_tools as mt
+    import soul
+    sid = _sid()
+    soul.write_file(sid, "wiki/話題2.md", "資金のバランスを見直したい話")
+
+    r = mt.execute(sid, {"tool": "search_memory", "query": "バランス"})
+
+    assert r["ok"] is True
+    assert "wiki/話題2.md" in r["detail"]
+
+
 # --- スキル（手続き記憶）: create_skill/update_skill/use_skill ---
 
 def test_create_skill_writes_file_and_reports_ok():

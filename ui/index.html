@@ -1161,6 +1161,26 @@
         <div class="hint">聞かれる前に思い出す機能。関連度は簡易ランクのため外れることもあります（AIには「関係なければ無視してよい」と伝えています）。正確な内容が必要ならAIはread_memoryで全文を読みます</div>
       </div>
 
+      <div class="card" id="embedding-card">
+        <h3>セマンティック検索（実験的）</h3>
+        <div class="toggle-row">
+          <input type="checkbox" id="embedding-enabled-checkbox">
+          <label style="min-width:auto;">言い換えでも通じる記憶検索を有効にする（字面が一致しなくても意味が近い記憶を拾う）</label>
+        </div>
+        <div class="row" style="margin-top:12px;">
+          <label>エンジンURL</label>
+          <input type="text" id="embedding-engine-url-input" placeholder="http://127.0.0.1:11434">
+        </div>
+        <div class="row" style="margin-top:12px;">
+          <label>モデル名</label>
+          <input type="text" id="embedding-model-input" placeholder="hf.co/Qwen/Qwen3-Embedding-0.6B-GGUF:Q8_0">
+        </div>
+        <div class="row" style="margin-top:12px;">
+          <button class="ghost" id="embedding-test-btn">接続テスト</button>
+        </div>
+        <div class="hint">Ollamaと埋め込みモデルが必要。無効時や接続できない時は従来の字面検索で動く</div>
+      </div>
+
       <div class="card" id="import-block">
         <h3>記憶のインポート</h3>
         <div class="hint">Markdown（.md / .markdown / .txt）を渡すと、AI本人が読んでwikiと索引に整理する。原文は souls/…/imported/ に無改変で保存される。</div>
@@ -3417,6 +3437,65 @@ function renderMarkdownToHtml(raw) {
     });
   });
 
+  // FieriA拡張: セマンティック検索。有効化チェックはttsパターン（change時に即保存）。
+  // URL/モデル名も同様に個別フィールドをchange時即保存にする（tts-engine-url-inputと
+  // 同じ流儀。auto-recallのようなまとめ保存ボタンは持たない）。
+  function renderEmbeddingCard() {
+    if (!state.settings) return;
+    var e = state.settings.embedding || {};
+    $("embedding-enabled-checkbox").checked = e.enabled === true;
+    $("embedding-engine-url-input").value = e.engine_url || "";
+    $("embedding-model-input").value = e.model || "";
+  }
+
+  function embeddingPayloadBase() {
+    return JSON.parse(JSON.stringify(state.settings.embedding || {}));
+  }
+
+  function saveEmbedding(embedding, successMsg) {
+    window.pywebview.api.save_settings({ embedding: embedding }).then(function (data) {
+      state.settings = data;
+      renderEmbeddingCard();
+      showToast(successMsg);
+    }).catch(function (err) {
+      showToast("保存に失敗した: " + err, "error");
+    });
+  }
+
+  $("embedding-enabled-checkbox").addEventListener("change", function () {
+    var e = embeddingPayloadBase();
+    e.enabled = $("embedding-enabled-checkbox").checked;
+    saveEmbedding(e, "セマンティック検索の設定を保存した");
+  });
+
+  $("embedding-engine-url-input").addEventListener("change", function () {
+    var e = embeddingPayloadBase();
+    e.engine_url = $("embedding-engine-url-input").value.trim();
+    saveEmbedding(e, "エンジンURLを保存した");
+  });
+
+  $("embedding-model-input").addEventListener("change", function () {
+    var e = embeddingPayloadBase();
+    e.model = $("embedding-model-input").value.trim();
+    saveEmbedding(e, "モデル名を保存した");
+  });
+
+  $("embedding-test-btn").addEventListener("click", function () {
+    var btn = $("embedding-test-btn");
+    btn.disabled = true;
+    window.pywebview.api.embedding_test().then(function (res) {
+      btn.disabled = false;
+      if (res.ok) {
+        showToast("接続できた");
+      } else {
+        showToast(res.error || "接続テストに失敗した", "error");
+      }
+    }).catch(function (err) {
+      btn.disabled = false;
+      showToast("接続テストに失敗した: " + err, "error");
+    });
+  });
+
   function renderPetCard() {
     if (!state.settings) return;
     $("pet-enabled-checkbox").checked = state.settings.pet_enabled !== false;
@@ -4270,6 +4349,7 @@ function renderMarkdownToHtml(raw) {
     memory: function () {
       renderWorkspaceCard();
       renderAutoRecallCard();
+      renderEmbeddingCard();
       refreshImportCount();
       renderScheduledJobs();
     },

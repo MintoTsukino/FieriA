@@ -13,10 +13,12 @@ import zipfile
 import webview
 
 import config as config_mod
+import embed as embed_mod
 import importer
 import memory_tools
 import prompt as prompt_mod
 import roles as roles_mod
+import search as search_mod
 import soul as soul_mod
 import tts as tts_mod
 import wrapup as wrapup_mod
@@ -163,6 +165,12 @@ class Bridge:
             )
         self._importing = False
         self._import_stop = False
+        # セマンティック検索の背景インデクサ（設計判断5）。soul_idごとに多重起動を
+        # 抑止するための実行中集合＋ロック。FIERIA_TESTINGガードはSchedulerと同じ
+        # 思想（テストから実Ollamaへ到達させない）。
+        self._indexer_lock = threading.Lock()
+        self._indexer_running = set()
+        self._start_embedding_indexer(self._cfg.get("active_soul"))
 
     def _ensure_engine(self):
         if not self._cfg.get("active_soul"):
@@ -176,6 +184,36 @@ class Bridge:
             restore_turns = self._cfg.get("restore_turns", 50)
             if restore_turns:
                 self._engine.restore_today(restore_turns)
+
+    def _start_embedding_indexer(self, soul_id):
+        """embedding有効時、指定SOULの未ベクトル断片を背景（デーモン）スレッドで
+        埋め込む（設計判断5）。boot時・save_settings時・switch_soul時に呼ばれる。
+        多重起動はsoul_idごとの実行中集合で抑止する（同じSOULに対して既に
+        走っている間は何もしない）。FIERIA_TESTING時は起動しない
+        （Schedulerの前例に倣う——テストから実Ollamaへ到達させない構造的な遮断）。
+        進捗はUIに出さない（MVP。裏で静かに追いつく設計）。"""
+        if os.environ.get("FIERIA_TESTING"):
+            return
+        if not soul_id:
+            return
+        embedding_cfg = self._cfg.get("embedding", {})
+        if not embedding_cfg.get("enabled"):
+            return
+        with self._indexer_lock:
+            if soul_id in self._indexer_running:
+                return
+            self._indexer_running.add(soul_id)
+
+        def _run():
+            try:
+                search_mod.update_vectors(soul_id, embedding_cfg)
+            except Exception:
+                pass
+            finally:
+                with self._indexer_lock:
+                    self._indexer_running.discard(soul_id)
+
+        threading.Thread(target=_run, daemon=True).start()
 
     def _llm_summary(self):
         """現在のLLMプロバイダ/モデル/推論エフォートのサマリー（画面ヘッダー表示用）。
@@ -211,6 +249,10 @@ class Bridge:
             # 読み上げ設定。JS側が返信完了フックでenabledを見てSEと切り替えるため、
             # replySeと同じ理由でbootに含める（ui/index.htmlの起動時state同期）。
             "tts": self._cfg.get("tts", copy.deepcopy(config_mod.DEFAULT_CONFIG["tts"])),
+            # セマンティック検索設定（背景インデクサの有無をJS側が判断する必要は
+            # 無いが、tts同様「起動時にstateへ同期しておく」設計に揃える）。
+            "embedding": self._cfg.get(
+                "embedding", copy.deepcopy(config_mod.DEFAULT_CONFIG["embedding"])),
             # 今日の会話ログ（表示専用の復元用）。engine.messagesには入れない＝
             # LLMへ渡す会話コンテキストは増やさない（設計判断: 今日の発言量が多いほど
             # APIコストが増えるトレードオフを許容するかは未確定のため、画面表示のみに留める）。
@@ -434,6 +476,7 @@ class Bridge:
         self._cfg["active_soul"] = soul_id
         config_mod.save_config(self._cfg)
         self._ensure_engine()
+        self._start_embedding_indexer(soul_id)
         return self.boot()
 
     # --- ロール ---
@@ -471,6 +514,8 @@ class Bridge:
             "reply_se": self._cfg.get("reply_se", "se-poko.mp3"),
             "ime_auto_ja": self._cfg.get("ime_auto_ja", True),
             "tts": self._cfg.get("tts", copy.deepcopy(config_mod.DEFAULT_CONFIG["tts"])),
+            "embedding": self._cfg.get(
+                "embedding", copy.deepcopy(config_mod.DEFAULT_CONFIG["embedding"])),
         }
 
     def save_settings(self, payload):
@@ -559,9 +604,19 @@ class Bridge:
                 "speaker": speaker,
                 "speed": speed,
             }
+        if "embedding" in payload:
+            # ttsと同じ入れ子丸ごと置き換え＋型確定パターン（JS側からの型を保証せず
+            # ここでbool/str確定させる）。
+            e = payload["embedding"] or {}
+            self._cfg["embedding"] = {
+                "enabled": bool(e.get("enabled", False)),
+                "engine_url": str(e.get("engine_url", "") or ""),
+                "model": str(e.get("model", "") or ""),
+            }
         config_mod.save_config(self._cfg)
         self._env = load_env()
         self._ensure_engine()
+        self._start_embedding_indexer(self._cfg.get("active_soul"))
         return self.get_settings()
 
     # --- 読み上げ（AivisSpeech/VOICEVOX互換） ---
@@ -577,6 +632,21 @@ class Bridge:
             return {"ok": False}
         threading.Thread(target=tts_mod.speak, args=(cfg_tts, text), daemon=True).start()
         return {"ok": True}
+
+    # --- セマンティック検索（Ollama埋め込み） ---
+    def embedding_test(self):
+        """設定画面の接続テスト用。1件embedしてOllama到達性を確認する。
+        tts_testと同じ「テストだけは失敗を表示してよい」方針（Global Constraints）——
+        速度・enabledは無視して即実行し、結果を同期で返す。"""
+        cfg_embedding = self._cfg.get("embedding", {})
+        try:
+            embed_mod.embed_texts(
+                cfg_embedding.get("engine_url", ""), cfg_embedding.get("model", ""),
+                ["接続テスト"])
+            return {"ok": True}
+        except Exception:
+            return {"ok": False,
+                    "error": "Ollamaに接続できない（起動しているか確認してください）"}
 
     def tts_stop(self):
         """再生停止。tts.stop自体は例外を出さない実装だが、他のstop系ブリッジ
