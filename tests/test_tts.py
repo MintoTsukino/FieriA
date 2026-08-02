@@ -120,11 +120,14 @@ def test_play_wav_async_returns_false_when_winsound_unavailable(monkeypatch):
     assert tts.play_wav_async(b"dummy") is False
 
 
-def test_play_wav_async_returns_true_and_calls_playsound(monkeypatch):
+def test_play_wav_async_plays_from_temp_file(monkeypatch, tmp_path):
+    """winsoundはSND_MEMORY+SND_ASYNCを仕様上サポートしない（実機E2Eで発覚した
+    RuntimeError）ため、一時ファイル経由のSND_FILENAME再生であることを固定する。
+    順序も重要: PURGE（前の再生停止）→ファイル書き込み→FILENAME再生。"""
     calls = []
 
     class FakeWinsound:
-        SND_MEMORY = 4
+        SND_FILENAME = 131072
         SND_ASYNC = 1
         SND_PURGE = 64
 
@@ -133,9 +136,14 @@ def test_play_wav_async_returns_true_and_calls_playsound(monkeypatch):
 
     fake = FakeWinsound()
     monkeypatch.setattr(tts, "winsound", fake)
+    tmp_wav = str(tmp_path / "t.wav")
+    monkeypatch.setattr(tts, "_tts_temp_path", lambda: tmp_wav)
     result = tts.play_wav_async(b"dummy-wav")
     assert result is True
-    assert calls == [(b"dummy-wav", fake.SND_MEMORY | fake.SND_ASYNC)]
+    assert calls == [(None, fake.SND_PURGE),
+                     (tmp_wav, fake.SND_FILENAME | fake.SND_ASYNC)]
+    with open(tmp_wav, "rb") as f:
+        assert f.read() == b"dummy-wav"
 
 
 def test_stop_calls_purge_when_winsound_available(monkeypatch):

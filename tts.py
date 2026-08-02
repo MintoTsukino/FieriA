@@ -13,6 +13,7 @@ winsoundはWindows専用のためモジュール先頭でtry import。無い環�
 Noneのままとなり、play_wav_async/stopは静かに無効化される。
 """
 import json
+import os
 import re
 import urllib.error
 import urllib.parse
@@ -82,12 +83,26 @@ def synthesize(engine_url, text, speaker, speed=1.0, timeout=15):
     return _http_post(synth_url, data=body, headers={"Content-Type": "application/json"}, timeout=timeout)
 
 
+def _tts_temp_path():
+    """再生用WAVの一時ファイルパス（プロセスごとに1つを使い回す）。"""
+    import tempfile
+    return os.path.join(tempfile.gettempdir(), f"fieria_tts_{os.getpid()}.wav")
+
+
 def play_wav_async(wav_bytes):
     """winsoundで非同期再生（成功True）。winsound無し環境はFalse。
-    新規再生は前の再生をSND_ASYNCの挙動で自動的に置き換える（スレッド管理不要）。"""
+
+    winsoundはSND_MEMORY+SND_ASYNCの組み合わせを仕様上サポートしない
+    （常にRuntimeError。2026-08-02の実機E2Eで発覚）ため、一時ファイルへ
+    書き出してSND_FILENAMEで再生する。書き込み前にSND_PURGEで前の再生を
+    止める——再生中のファイルを上書きしないため。"""
     if winsound is None:
         return False
-    winsound.PlaySound(wav_bytes, winsound.SND_MEMORY | winsound.SND_ASYNC)
+    path = _tts_temp_path()
+    winsound.PlaySound(None, winsound.SND_PURGE)
+    with open(path, "wb") as f:
+        f.write(wav_bytes)
+    winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
     return True
 
 
