@@ -2065,3 +2065,123 @@ def test_switch_soul_restarts_embedding_indexer_for_new_soul():
     bridge.switch_soul(sid)
 
     assert calls == [sid]
+
+
+# --- SOULごとのLLMプロバイダ紐付け Task 1: 実効LLM解決 ---
+# 2026-08-03追加。soul_llm（config.py DEFAULT_CONFIG）でSOULごとにプロバイダを
+# 紐付けられるようにする。最大の罠はグローバルself._cfg["llm"]の汚染
+# （_effective_llm_cfgは必ずディープコピー上で組む——計画書Global Constraints）。
+
+
+def test_effective_llm_cfg_uses_bound_provider_for_soul():
+    import gui
+    bridge = gui.Bridge()
+    bridge._cfg["llm"]["provider"] = "gemini"
+    bridge._cfg["soul_llm"] = {"soul-a": {"provider": "openrouter"}}
+
+    effective = bridge._effective_llm_cfg("soul-a")
+
+    assert effective["provider"] == "openrouter"
+
+
+def test_effective_llm_cfg_does_not_mutate_global_llm_config():
+    """最重要の罠: _effective_llm_cfgでprovider差し替え後もグローバル
+    self._cfg["llm"]["provider"]が元のままであること（ディープコピー原則）。"""
+    import gui
+    bridge = gui.Bridge()
+    bridge._cfg["llm"]["provider"] = "gemini"
+    bridge._cfg["soul_llm"] = {"soul-a": {"provider": "openrouter"}}
+
+    effective = bridge._effective_llm_cfg("soul-a")
+
+    assert effective["provider"] == "openrouter"
+    assert bridge._cfg["llm"]["provider"] == "gemini"
+    # providersサブ辞書も含め共有参照になっていないこと
+    effective["providers"]["gemini"]["model"] = "改ざんされたモデル"
+    assert bridge._cfg["llm"]["providers"]["gemini"]["model"] != "改ざんされたモデル"
+
+
+def test_effective_llm_cfg_falls_back_to_global_when_bound_provider_missing():
+    """紐付け先プロバイダがproviders configに実在しない（削除済み・タイポ等）場合、
+    黙ってグローバル設定のprovider値のまま返す。"""
+    import gui
+    bridge = gui.Bridge()
+    bridge._cfg["llm"]["provider"] = "gemini"
+    bridge._cfg["soul_llm"] = {"soul-a": {"provider": "存在しないプロバイダ"}}
+
+    effective = bridge._effective_llm_cfg("soul-a")
+
+    assert effective["provider"] == "gemini"
+
+
+def test_effective_llm_cfg_returns_global_unchanged_when_no_binding():
+    import gui
+    bridge = gui.Bridge()
+    bridge._cfg["llm"]["provider"] = "gemini"
+    bridge._cfg["soul_llm"] = {}
+
+    effective = bridge._effective_llm_cfg("soul-a")
+
+    assert effective["provider"] == "gemini"
+
+
+def test_save_settings_soul_llm_keeps_only_valid_provider_names():
+    """save_settingsのsoul_llmはホワイトリスト検証: providers実在名のみ通過。
+    不正・空・存在しないプロバイダ名のエントリは除去される。"""
+    import gui
+    import config as config_mod
+    bridge = gui.Bridge()
+
+    result = bridge.save_settings({"soul_llm": {
+        "soul-a": {"provider": "gemini"},
+        "soul-b": {"provider": "存在しないプロバイダ"},
+        "soul-c": {"provider": ""},
+    }})
+
+    assert result["soul_llm"] == {"soul-a": {"provider": "gemini"}}
+    reloaded = config_mod.load_config()
+    assert reloaded["soul_llm"] == {"soul-a": {"provider": "gemini"}}
+
+
+def test_llm_summary_bound_soul_flag_true_when_bound_and_absent_otherwise():
+    import gui
+    bridge = gui.Bridge()
+    bridge._cfg["llm"]["provider"] = "gemini"
+    bridge._cfg["active_soul"] = "soul-a"
+    bridge._cfg["soul_llm"] = {"soul-a": {"provider": "openrouter"}}
+
+    summary = bridge._llm_summary()
+
+    assert summary["provider"] == "openrouter"
+    assert summary["bound_soul"] is True
+
+    bridge._cfg["soul_llm"] = {}
+    summary_unbound = bridge._llm_summary()
+
+    assert summary_unbound["provider"] == "gemini"
+    assert "bound_soul" not in summary_unbound
+
+
+def test_ensure_engine_uses_effective_llm_cfg_for_active_soul(monkeypatch):
+    """_ensure_engineが紐付け済みプロバイダでcreate_llmを呼ぶこと（実際のAPIは
+    叩かず、create_llmへ渡されたllm_cfgのproviderだけを検証する）。"""
+    import gui
+    import soul
+    bridge = gui.Bridge()
+    active_soul = soul.create_soul("紐付けエンジンテスト")
+    bridge._cfg["active_soul"] = active_soul
+    bridge._cfg["llm"]["provider"] = "gemini"
+    bridge._cfg["soul_llm"] = {active_soul: {"provider": "openrouter"}}
+
+    captured = {}
+    real_create_llm = gui.create_llm
+
+    def fake_create_llm(llm_cfg, env):
+        captured["provider"] = llm_cfg.get("provider")
+        return real_create_llm(llm_cfg, env)
+
+    monkeypatch.setattr(gui, "create_llm", fake_create_llm)
+
+    bridge._ensure_engine()
+
+    assert captured["provider"] == "openrouter"

@@ -209,6 +209,11 @@ DEFAULT_CONFIG = {
     },
     "active_soul": None,
     "active_role": None,
+    # SOULごとのLLMプロバイダ紐付け（2026-08-03）。{soul_id: {"provider": <name>}}。
+    # SOULフォルダ（記憶の聖域）ではなくconfig側で持つ——プロバイダ名はこの環境の
+    # config固有概念のため。紐付け無しのSOULは従来どおりグローバルllm設定を使う
+    # （gui.py _effective_llm_cfg参照）。
+    "soul_llm": {},
     "fact_layer": {"enabled": True, "custom_text": ""},
     # 定期処理のON/OFF（scheduler.py JOBSのidをキーにする）。GUIの「定期処理」カードから
     # 切り替える（gui.py get_scheduled_jobs/set_scheduled_job参照）。

@@ -179,11 +179,27 @@ class Bridge:
                 self._cfg["active_soul"] = souls[0]["id"]
                 config_mod.save_config(self._cfg)
         if self._cfg.get("active_soul"):
-            self._llm = create_llm(self._cfg["llm"], self._env)
-            self._engine = Engine(self._cfg, self._llm, self._cfg["active_soul"])
+            active_soul = self._cfg["active_soul"]
+            self._llm = create_llm(self._effective_llm_cfg(active_soul), self._env)
+            self._engine = Engine(self._cfg, self._llm, active_soul)
             restore_turns = self._cfg.get("restore_turns", 50)
             if restore_turns:
                 self._engine.restore_today(restore_turns)
+
+    def _effective_llm_cfg(self, soul_id):
+        """SOULごとのプロバイダ紐付け（soul_llm）を反映した実効llm設定を返す。
+
+        グローバルself._cfg["llm"]は絶対に書き換えない——必ずディープコピー上で
+        provider差し替えを行う（providers辞書内の各entryも含め共有参照を断つ。
+        計画書Global Constraints「providers entryの共有参照汚染に注意」）。
+        紐付け先プロバイダがproviders configに実在しなければ黙ってグローバル設定
+        （コピー）のまま返す＝フォールバック。"""
+        effective = copy.deepcopy(self._cfg.get("llm", {}))
+        bound = self._cfg.get("soul_llm", {}).get(soul_id, {}) or {}
+        provider = bound.get("provider")
+        if provider and provider in effective.get("providers", {}):
+            effective["provider"] = provider
+        return effective
 
     def _start_embedding_indexer(self, soul_id):
         """embedding有効時、指定SOULの未ベクトル断片を背景（デーモン）スレッドで
@@ -216,20 +232,27 @@ class Bridge:
         threading.Thread(target=_run, daemon=True).start()
 
     def _llm_summary(self):
-        """現在のLLMプロバイダ/モデル/推論エフォートのサマリー（画面ヘッダー表示用）。
-        providerがproviders configに存在しない等の異常時も例外にせず空文字で埋めて返す。"""
+        """現在のLLM（SOUL紐付けが効いていれば実効値）のプロバイダ/モデル/推論
+        エフォートのサマリー（画面ヘッダー表示用）。providerがproviders configに
+        存在しない等の異常時も例外にせず空文字で埋めて返す。紐付けが効いている
+        場合は bound_soul: True を追加する（既存キーはそのまま維持）。"""
         empty = {"provider": "", "label": "", "model": "", "reasoning_effort": ""}
-        llm_cfg = self._cfg.get("llm", {})
+        active_soul = self._cfg.get("active_soul")
+        llm_cfg = self._effective_llm_cfg(active_soul) if active_soul else self._cfg.get("llm", {})
         provider = llm_cfg.get("provider", "")
         entry = llm_cfg.get("providers", {}).get(provider)
         if not provider or not entry:
             return empty
-        return {
+        summary = {
             "provider": provider,
             "label": config_mod.PROVIDER_LABELS.get(provider, provider),
             "model": entry.get("model", ""),
             "reasoning_effort": entry.get("reasoning_effort", ""),
         }
+        bound = self._cfg.get("soul_llm", {}).get(active_soul, {}) if active_soul else {}
+        if (bound or {}).get("provider") in llm_cfg.get("providers", {}):
+            summary["bound_soul"] = True
+        return summary
 
     # --- 起動・会話 ---
     def boot(self):
@@ -258,6 +281,7 @@ class Bridge:
             # APIコストが増えるトレードオフを許容するかは未確定のため、画面表示のみに留める）。
             "today_log": soul_mod.read_today_log(active_soul) if active_soul else [],
             "llm_summary": self._llm_summary(),
+            "soul_llm": self._cfg.get("soul_llm", {}),
         }
 
     def send_message(self, text, images=None):
@@ -516,6 +540,7 @@ class Bridge:
             "tts": self._cfg.get("tts", copy.deepcopy(config_mod.DEFAULT_CONFIG["tts"])),
             "embedding": self._cfg.get(
                 "embedding", copy.deepcopy(config_mod.DEFAULT_CONFIG["embedding"])),
+            "soul_llm": self._cfg.get("soul_llm", {}),
         }
 
     def save_settings(self, payload):
@@ -613,6 +638,22 @@ class Bridge:
                 "engine_url": str(e.get("engine_url", "") or ""),
                 "model": str(e.get("model", "") or ""),
             }
+        if "soul_llm" in payload:
+            # SOULごとのLLMプロバイダ紐付け。ホワイトリスト検証: providerが
+            # 現在のllm.providersに実在するエントリのみ通す。不正・空・
+            # 存在しないプロバイダ名は「紐付け解除」として黙って落とす
+            # （計画書Global Constraints: 紐付け無し時は完全に従来動作）。
+            incoming = payload["soul_llm"] or {}
+            providers = self._cfg.get("llm", {}).get("providers", {})
+            validated = {}
+            if isinstance(incoming, dict):
+                for soul_id, entry in incoming.items():
+                    if not isinstance(entry, dict):
+                        continue
+                    provider = entry.get("provider")
+                    if provider and provider in providers:
+                        validated[soul_id] = {"provider": provider}
+            self._cfg["soul_llm"] = validated
         config_mod.save_config(self._cfg)
         self._env = load_env()
         self._ensure_engine()

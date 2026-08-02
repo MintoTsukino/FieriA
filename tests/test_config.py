@@ -954,6 +954,30 @@ def test_load_config_preserves_explicit_reply_se():
     assert reloaded["reply_se"] == "se-kachi.mp3"
 
 
+def test_default_soul_llm_is_empty_dict():
+    """SOULごとのLLMプロバイダ紐付け（2026-08-03）。既定は紐付け無し＝空dict
+    （全SOULが従来どおりグローバルllm設定を使う）。"""
+    config = _fresh_config()
+    cfg = config.load_config()
+    assert cfg["soul_llm"] == {}
+
+
+def test_load_config_backfills_missing_soul_llm_without_overwriting_others():
+    config = _fresh_config()
+    cfg = config.load_config()
+    del cfg["soul_llm"]
+    cfg["active_soul"] = "soul-1"
+    config.save_config(cfg)
+
+    reloaded = config.load_config()
+    assert reloaded["soul_llm"] == {}
+    assert reloaded["active_soul"] == "soul-1"
+
+    with open(config.CONFIG_PATH, "r", encoding="utf-8") as f:
+        on_disk = json.load(f)
+    assert on_disk["soul_llm"] == {}
+
+
 def test_reply_se_choices_contains_all_six_files_and_empty():
     config = _fresh_config()
     assert config.REPLY_SE_CHOICES == (
