@@ -1013,7 +1013,7 @@ def test_process_turn_injects_recall_block_when_related_memory_exists():
 
     system_text = fake.calls[0][0]["content"]
     assert "## 連想記憶（自動検索）" in system_text
-    assert "[出典: wiki/UI談義.md]" in system_text
+    assert "[出典: wiki/UI談義.md｜" in system_text  # 日付タグ付き形式（2026-08-02〜）
 
 
 def test_process_turn_omits_recall_section_when_no_hits():

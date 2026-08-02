@@ -125,7 +125,20 @@ def _neutralize_fence_lines(text):
         for line in lines)
 
 
-def _format_hits(hits, max_hits, exclude_today):
+def _file_date(soul_id, source):
+    """記憶ファイルの更新日（YYYY-MM-DD）。取れなければ空文字列。
+    「いつの情報か」を常に見せるための時点表示（コノハ発案・2026-08-02）。"""
+    try:
+        import datetime
+        import os
+        path = os.path.join(soul_mod.soul_dir(soul_id), *source.split("/"))
+        mtime = os.path.getmtime(path)
+        return datetime.date.fromtimestamp(mtime).isoformat()
+    except Exception:
+        return ""
+
+
+def _format_hits(hits, max_hits, exclude_today, soul_id=None):
     # 「忘れる」の実体: archive/配下（soul.archive_fileで降ろした記憶）はここで除外する。
     # アーカイブされた記憶は連想（auto-recall）の対象から外れて日常会話でふと浮かばなく
     # なるが、記録自体は消えていない——search_memory（明示検索）はsearch.pyの汎用走査で
@@ -146,7 +159,10 @@ def _format_hits(hits, max_hits, exclude_today):
         if len(snippet) > SNIPPET_CHARS:
             snippet = snippet[:SNIPPET_CHARS] + "…"
         snippet = _neutralize_fence_lines(snippet)
-        lines.append(f"[出典: {h.get('source', '')}] {snippet}")
+        source = h.get("source", "")
+        date = _file_date(soul_id, source) if soul_id else ""
+        tag = f"[出典: {source}｜{date}時点]" if date else f"[出典: {source}]"
+        lines.append(f"{tag} {snippet}")
     text = "\n\n".join(lines)
     if len(text) > TOTAL_CHARS:
         text = text[:TOTAL_CHARS] + "…"
@@ -171,7 +187,7 @@ def build_recall_block(cfg, soul_id, user_text):
             return ""
         hits = _ranked_hits(soul_id, keywords)
         exclude_today = _should_exclude_today_log(cfg, soul_id)
-        body = _format_hits(hits, max_hits, exclude_today)
+        body = _format_hits(hits, max_hits, exclude_today, soul_id=soul_id)
     except Exception:
         return ""
     if not body:

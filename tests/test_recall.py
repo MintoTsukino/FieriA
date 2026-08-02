@@ -1,6 +1,8 @@
 import datetime
 import time
 
+import recall
+
 
 def _sid():
     import soul
@@ -63,7 +65,7 @@ def test_build_recall_block_returns_hit_with_source_label():
     block = recall.build_recall_block(cfg, sid, "前にインベントリの話したっけ？")
 
     assert "## 連想記憶（自動検索）" in block
-    assert "[出典: wiki/UI談義.md]" in block
+    assert f"[出典: wiki/UI談義.md｜{datetime.date.today().isoformat()}時点]" in block
     assert "関係なければ無視してよい" in block
 
 
@@ -114,7 +116,7 @@ def test_build_recall_block_does_not_exclude_older_log_dates():
 
     block = recall.build_recall_block(cfg, sid, "インベントリの話、覚えてる？")
 
-    assert "[出典: logs/2020-01-01.jsonl]" in block
+    assert "[出典: logs/2020-01-01.jsonl｜" in block  # 日付タグ付き（mtimeは実行時依存のため接頭のみ固定）
 
 
 def test_build_recall_block_respects_max_hits():
@@ -171,7 +173,7 @@ def test_build_recall_block_default_enabled_when_key_missing():
 
     block = recall.build_recall_block(cfg, sid, "インベントリの話、覚えてる？")
 
-    assert "[出典: wiki/UI談義.md]" in block
+    assert f"[出典: wiki/UI談義.md｜{datetime.date.today().isoformat()}時点]" in block
 
 
 # --- 修正1: 注入断片のフェンス＋権威否定 ---
@@ -304,7 +306,7 @@ def test_build_recall_block_real_topic_not_crowded_out_by_routine_noise():
 
     block = recall.build_recall_block(cfg, sid, "今日は自分で資金のバランス見直したい")
 
-    assert f"[出典: logs/{topic_day.isoformat()}.jsonl]" in block
+    assert f"[出典: logs/{topic_day.isoformat()}.jsonl｜" in block
     for i in range(59):
         day = base + datetime.timedelta(days=i)
         assert f"logs/{day.isoformat()}.jsonl" not in block
@@ -354,7 +356,7 @@ def test_build_recall_block_still_surfaces_non_archived_hit_alongside_archived()
 
     block = recall.build_recall_block(cfg, sid, "前にインベントリの話したっけ？")
 
-    assert "[出典: wiki/現行話題.md]" in block
+    assert "[出典: wiki/現行話題.md｜" in block
     assert "archive/" not in block
 
 
@@ -370,3 +372,29 @@ def test_build_recall_block_excludes_todays_log_when_within_restore_turns():
     block = recall.build_recall_block(cfg, sid, "インベントリの話、覚えてる？")
 
     assert block == ""
+
+
+# --- 連想記憶の時点表示——コノハ発案・2026-08-02 ---
+# 「いつの情報か」を常に見せる（記憶は時点情報という規律の実装側）。
+
+def test_format_hits_appends_file_date(tmp_path):
+    import os
+    import soul as soul_mod
+    sid = soul_mod.create_soul("時点表示テスト", "コア")
+    soul_mod.write_file(sid, "wiki/りんご.md", "りんごの話をたくさんした")
+    path = os.path.join(soul_mod.soul_dir(sid), "wiki", "りんご.md")
+    # mtimeを固定して日付表示を検証（2026-07-15）
+    import time as _time
+    fixed = _time.mktime((2026, 7, 15, 12, 0, 0, 0, 0, -1))
+    os.utime(path, (fixed, fixed))
+    hits = [{"source": "wiki/りんご.md", "snippet": "りんごの話をたくさんした"}]
+    body = recall._format_hits(hits, 3, exclude_today=False, soul_id=sid)
+    assert "[出典: wiki/りんご.md｜2026-07-15時点]" in body
+
+
+def test_format_hits_survives_missing_file(tmp_path):
+    import soul as soul_mod
+    sid = soul_mod.create_soul("時点欠落テスト", "コア")
+    hits = [{"source": "wiki/消えた.md", "snippet": "断片"}]
+    body = recall._format_hits(hits, 3, exclude_today=False, soul_id=sid)
+    assert "[出典: wiki/消えた.md]" in body  # 日付なしでも壊れない

@@ -376,3 +376,30 @@ def test_safety_layer_order_between_fact_and_soul():
     i_soul = text.find("わたしはテト")
     assert -1 not in (i_fact, i_safety, i_soul)
     assert i_fact < i_safety < i_soul
+
+
+# --- 記憶の扱い方（認識論の規律）——コノハ発案・2026-08-02 ---
+# 記憶は時点情報であること・引用と解釈の区別・現在優先の3箇条を常時注入する。
+# 安全層と同じく設定で無効化できない（記憶で人格が育つ設計の土台規律のため）。
+
+def test_memory_epistemics_block_always_present():
+    import prompt
+    import soul as soul_mod
+    sid = soul_mod.create_soul("認識論テスト", "コア")
+    text = prompt.build_system_text({"fact_layer": {"enabled": False}}, sid)
+    assert "## 記憶の扱い方" in text
+    assert "書かれた時点" in text
+    assert "推測" in text
+    assert "現在の会話を優先" in text
+
+
+def test_memory_epistemics_after_safety_before_memory_index():
+    import prompt
+    import soul as soul_mod
+    sid = soul_mod.create_soul("認識論順序テスト", "コア")
+    soul_mod.write_file(sid, "MEMORY.md", "- なにか\n")
+    text = prompt.build_system_text({"fact_layer": {"enabled": True}}, sid)
+    i_safety = text.index("## 安全上の決まり")
+    i_epi = text.index("## 記憶の扱い方")
+    i_index = text.index("## 記憶の索引")
+    assert i_safety < i_epi < i_index
