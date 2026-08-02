@@ -706,11 +706,18 @@
     mix-blend-mode: overlay;
   }
 
-  /* vapor: チャット面だけに夕陽グロー（局所）＋重なる要素の半透明ぼかし。
-     nav・サイドバーは通常の--bg系のまま保ち、明るいグラデに文字が埋もれないようにする
-     （グローの中心・広がりも、role-bar/compose-rowの位置には強く掛からない範囲に収める）。 */
+  /* vapor: チャット面の下端に沈む夕陽グロー（半透明）＋重なる要素の半透明ぼかし。
+     nav・サイドバーは通常の--bg系のまま保つ。初版は画面中央に不透明の
+     黄→ピンクを置いていて眩しすぎた（2026-08-02実機FB）ため、太陽を
+     地平線（下端）へ落とし、全色を低アルファにして本文可読性を優先する。 */
   body[data-theme-fx="vapor"] #chat-view {
-    background-image: radial-gradient(90% 70% at 28% 55%, #fffb96 0%, #ff71ce 20%, #b967ff 42%, #1b0b3a 68%);
+    background-image:
+      radial-gradient(70% 45% at 50% 100%,
+        rgba(255, 251, 150, .16) 0%,
+        rgba(255, 113, 206, .20) 26%,
+        rgba(185, 103, 255, .16) 52%,
+        rgba(27, 11, 58, 0) 76%),
+      linear-gradient(180deg, #1b0b3a 0%, #221046 62%, #2a1152 100%);
     background-repeat: no-repeat;
   }
   body[data-theme-fx="vapor"] .card,
