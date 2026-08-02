@@ -797,6 +797,21 @@
   body[data-theme-fx="crt"] #compose-row button#send-btn {
     text-shadow: 0 0 4px rgba(43,255,136,.65);
   }
+  /* 端末系(crt/cli)のユーザー発言は「明るい塗り＋暗い文字」をやめる。
+     ブラウン管も端末画面も、光っているのは常に単色の文字であって面ではない
+     （実機FB: CRTでユーザー吹き出しだけクリーム色に見えて質感が壊れた）。
+     塗りは背景色のまま、枠線と内側のグローで相手側と区別する。 */
+  body[data-theme-fx="crt"] .bubble-row.user .bubble {
+    background: var(--bg2);
+    color: var(--fg);
+    border: 1px solid var(--accent);
+    box-shadow: inset 0 0 10px rgba(43, 255, 136, .18);
+  }
+  body[data-theme-fx="cli"] .bubble-row.user .bubble {
+    background: var(--bg2);
+    color: var(--bubble-user);
+    border: 1px solid var(--bubble-user);
+  }
 
   /* glitch: アクセント要素に赤/シアンの色収差。常時は微量、スライス風の強い動きはホバー時のみ */
   body[data-theme-fx="glitch"] .nav-btn.active,
