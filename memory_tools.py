@@ -348,7 +348,10 @@ def build_tools_spec(cfg, soul_id=None):
                          "\n".join(_TOOL_ONELINERS[n] for n in _ROLE_TOOL_NAMES) +
                          "\n\n" + _roles_index_block())
         sections.append(role_section)
-    if (cfg.get("llm") or {}).get("web_search") and _current_llm_type(cfg) != "gemini":
+    # アプリ内蔵web_searchツールは、ネイティブWeb検索を持つプロバイダには注入しない。
+    # gemini: Google Search grounding。openai_codex_oauth: Responses APIの組み込み
+    # tools:[{"type":"web_search"}]（2026-08-02にネイティブ切替、llm.CodexOAuthLLM参照）。
+    if (cfg.get("llm") or {}).get("web_search") and _current_llm_type(cfg) not in ("gemini", "openai_codex_oauth"):
         sections.append("## Web検索\n" + _TOOL_ONELINERS["web_search"])
     sections.append(_skills_index_block(soul_id, cfg))
     sections.append(_INDEX_FOOTER)

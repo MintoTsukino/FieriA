@@ -322,3 +322,124 @@ def test_sources_block_omits_query_line_when_absent():
     import llm
     block = llm._format_sources_block([("記事A", "https://a.example/1")], [])
     assert "検索語" not in block
+
+
+# --- CodexOAuthLLM: ネイティブWeb検索(tools:[{"type":"web_search"}]) ---
+
+def _codex_entry():
+    return {"model": "gpt-5.5"}
+
+
+def _codex_sse(text):
+    return ("data: " + json.dumps({
+        "type": "response.output_text.delta", "delta": text,
+    }) + "\n\n")
+
+
+def _fake_codex_login(monkeypatch):
+    import openai_codex_oauth
+    monkeypatch.setattr(openai_codex_oauth, "get_access_token", lambda: "tok")
+    monkeypatch.setattr(openai_codex_oauth, "get_account_id", lambda: "acct")
+
+
+def test_codex_chat_adds_web_search_tool_when_enabled(monkeypatch):
+    _fake_codex_login(monkeypatch)
+    captured = {}
+
+    def fake_post_sse(url, payload, headers=None, timeout=120):
+        captured["url"] = url
+        captured["payload"] = payload
+        return _codex_sse("ok")
+
+    monkeypatch.setattr(llm, "_post_sse", fake_post_sse)
+    provider = llm.CodexOAuthLLM(_codex_entry(), temperature=0.8, max_tokens=2000,
+                                  web_search=True)
+    result = provider.chat([{"role": "user", "content": "hi"}])
+    assert captured["payload"]["tools"] == [{"type": "web_search"}]
+    assert result == "ok"
+
+
+def test_codex_chat_omits_web_search_tool_when_disabled(monkeypatch):
+    _fake_codex_login(monkeypatch)
+    captured = {}
+
+    def fake_post_sse(url, payload, headers=None, timeout=120):
+        captured["payload"] = payload
+        return _codex_sse("ok")
+
+    monkeypatch.setattr(llm, "_post_sse", fake_post_sse)
+    provider = llm.CodexOAuthLLM(_codex_entry(), temperature=0.8, max_tokens=2000,
+                                  web_search=False)
+    provider.chat([{"role": "user", "content": "hi"}])
+    assert "tools" not in captured["payload"]
+
+
+def test_codex_web_search_defaults_to_disabled(monkeypatch):
+    """web_searchキーワードを渡さない既存呼び出し(後方互換)は無効のまま。"""
+    _fake_codex_login(monkeypatch)
+    captured = {}
+
+    def fake_post_sse(url, payload, headers=None, timeout=120):
+        captured["payload"] = payload
+        return _codex_sse("ok")
+
+    monkeypatch.setattr(llm, "_post_sse", fake_post_sse)
+    provider = llm.CodexOAuthLLM(_codex_entry(), temperature=0.8, max_tokens=2000)
+    provider.chat([{"role": "user", "content": "hi"}])
+    assert "tools" not in captured["payload"]
+
+
+def test_codex_chat_retries_once_without_tools_on_tools_rejection(monkeypatch):
+    """非公式エンドポイントがtools/web_searchを拒否した場合(410/400等)、toolsを
+    抜いて1回だけリトライし、検索なしで会話を守る。"""
+    _fake_codex_login(monkeypatch)
+    calls = []
+
+    def fake_post_sse(url, payload, headers=None, timeout=120):
+        calls.append(payload)
+        if len(calls) == 1:
+            raise RuntimeError("HTTP 400: Unknown parameter 'tools' (web_search not supported)")
+        return _codex_sse("ok（検索なし）")
+
+    monkeypatch.setattr(llm, "_post_sse", fake_post_sse)
+    provider = llm.CodexOAuthLLM(_codex_entry(), temperature=0.8, max_tokens=2000,
+                                  web_search=True)
+    result = provider.chat([{"role": "user", "content": "hi"}])
+    assert len(calls) == 2
+    assert "tools" in calls[0]
+    assert "tools" not in calls[1]
+    assert result == "ok（検索なし）"
+
+
+def test_codex_chat_does_not_retry_on_unrelated_error(monkeypatch):
+    """toolsやweb_searchと無関係なエラーはそのまま伝播する(検索なし救済の対象外)。"""
+    _fake_codex_login(monkeypatch)
+    calls = []
+
+    def fake_post_sse(url, payload, headers=None, timeout=120):
+        calls.append(payload)
+        raise RuntimeError("HTTP 500: internal server error")
+
+    monkeypatch.setattr(llm, "_post_sse", fake_post_sse)
+    provider = llm.CodexOAuthLLM(_codex_entry(), temperature=0.8, max_tokens=2000,
+                                  web_search=True)
+    try:
+        provider.chat([{"role": "user", "content": "hi"}])
+        assert False, "例外が伝播しなかった"
+    except RuntimeError as e:
+        assert "internal server error" in str(e)
+    assert len(calls) == 1
+
+
+def test_build_provider_passes_web_search_to_codex_oauth():
+    provider = llm.build_provider({"type": "openai_codex_oauth", "model": "gpt-5.5"}, {},
+                                   temperature=0.8, max_tokens=2000, web_search=True)
+    assert isinstance(provider, llm.CodexOAuthLLM)
+    assert provider.web_search is True
+
+
+def test_build_provider_codex_oauth_web_search_defaults_to_false():
+    provider = llm.build_provider({"type": "openai_codex_oauth", "model": "gpt-5.5"}, {},
+                                   temperature=0.8, max_tokens=2000)
+    assert isinstance(provider, llm.CodexOAuthLLM)
+    assert provider.web_search is False

@@ -632,11 +632,18 @@ class CodexOAuthLLM(_ChatStreamFallbackMixin):
     CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
     FALLBACK_MODELS = ["gpt-5.5", "gpt-5.4-mini", "gpt-5.4", "gpt-5.3-codex", "gpt-5.3-codex-spark"]
 
-    def __init__(self, entry, temperature, max_tokens, reasoning_effort=""):
+    def __init__(self, entry, temperature, max_tokens, reasoning_effort="", web_search=False):
         self.model = entry.get("model", "gpt-5.5")
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.reasoning_effort = (reasoning_effort or "").strip()
+        # FieriA拡張: Web検索。OpenAI公式Responses APIの組み込みtools:[{"type":"web_search"}]
+        # が、この非公式Codexエンドポイント（chatgpt.com/backend-api/codex）でも通ることを
+        # 2026-08-02に実弾probeで確認済み（実際に検索が走り正しい答えが返った）。ただし非公式
+        # エンドポイントのため、将来サーバ側の仕様変更で拒否される（410/400等）リスクは残る
+        # ——chat()側でtools起因のエラーだけ検知して1回だけ検索なしリトライする保険を持つ
+        # （Grok Live Searchが2026-08-02にHTTP 410で廃止された前例に対する備え）。
+        self.web_search = bool(web_search)
 
     def _headers(self):
         import openai_codex_oauth
@@ -687,6 +694,23 @@ class CodexOAuthLLM(_ChatStreamFallbackMixin):
         except Exception:
             return list(self.FALLBACK_MODELS)
 
+    def _post_responses_sse(self, payload):
+        """/responses へPOSTする。web_search有効時のみ保険をかける：エンドポイントが
+        tools/web_searchを理由に拒否した（メッセージに"tools"か"web_search"を含む
+        HTTPエラー）場合、payloadからtoolsを外して1回だけリトライし検索なしで
+        会話を守る（Grok Live Search廃止＝HTTP 410全滅の教訓）。それ以外の例外は
+        そのまま送出する。"""
+        if not self.web_search:
+            return _post_sse(f"{self.CODEX_BASE_URL}/responses", payload, headers=self._headers())
+        try:
+            return _post_sse(f"{self.CODEX_BASE_URL}/responses", payload, headers=self._headers())
+        except Exception as e:
+            msg = str(e)
+            if "tools" not in msg and "web_search" not in msg:
+                raise
+            retry_payload = {k: v for k, v in payload.items() if k != "tools"}
+            return _post_sse(f"{self.CODEX_BASE_URL}/responses", retry_payload, headers=self._headers())
+
     def chat(self, messages, max_tokens=None):
         system_text = next((m["content"] for m in messages if m["role"] == "system"), "")
         payload = {
@@ -701,7 +725,9 @@ class CodexOAuthLLM(_ChatStreamFallbackMixin):
         }
         if self.reasoning_effort:
             payload["reasoning"] = {"effort": self.reasoning_effort}
-        raw = _post_sse(f"{self.CODEX_BASE_URL}/responses", payload, headers=self._headers())
+        if self.web_search:
+            payload["tools"] = [{"type": "web_search"}]
+        raw = self._post_responses_sse(payload)
 
         # stream:true時は本文がresponse.output_text.deltaで届く（最終イベントの
         # outputが空になりうるため、まずこちらを優先する）
@@ -754,9 +780,9 @@ class OpenRouterLLM(OpenAICompatLLM):
 def build_provider(entry, env, temperature, max_tokens, reasoning_effort="", web_search=False):
     """プロバイダ設定エントリ1つからインスタンスを作る（GUIの一覧取得でも使う）。
 
-    FieriA拡張: Web検索。web_searchはgemini/xai_oauthタイプのコンストラクタにだけ
-    渡す——対応外プロバイダ（openai_compat等）は元々このキーワード自体を受け付けない
-    ため、ここで渡し先を分岐させて「渡さない」ことで無視を実現する。"""
+    FieriA拡張: Web検索。web_searchはgemini/xai_oauth/openai_codex_oauthタイプの
+    コンストラクタにだけ渡す——対応外プロバイダ（openai_compat等）は元々このキーワード
+    自体を受け付けないため、ここで渡し先を分岐させて「渡さない」ことで無視を実現する。"""
     api_key = resolve_api_key(entry, env)
     ptype = entry.get("type", "openai_compat")
     if ptype == "openai_compat":
@@ -766,7 +792,7 @@ def build_provider(entry, env, temperature, max_tokens, reasoning_effort="", web
     if ptype == "xai_oauth":
         return XaiOAuthLLM(entry, "", temperature, max_tokens, reasoning_effort, web_search=web_search)
     if ptype == "openai_codex_oauth":
-        return CodexOAuthLLM(entry, temperature, max_tokens, reasoning_effort)
+        return CodexOAuthLLM(entry, temperature, max_tokens, reasoning_effort, web_search=web_search)
     if ptype == "openrouter":
         return OpenRouterLLM(entry, api_key, temperature, max_tokens, reasoning_effort)
     raise ValueError(f"未対応のLLMタイプ: {ptype}")

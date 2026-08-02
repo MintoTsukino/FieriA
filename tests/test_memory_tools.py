@@ -1623,3 +1623,13 @@ def test_build_tools_spec_includes_web_search_for_non_gemini():
 def test_web_search_not_in_importer_allowed_tools():
     import importer
     assert "web_search" not in importer.ALLOWED_TOOLS
+
+
+def test_build_tools_spec_omits_web_search_for_codex_oauth():
+    """Codex(openai_codex_oauth)はネイティブWeb検索(tools:[{"type":"web_search"}])に
+    切り替えたので、アプリ内蔵web_searchツールは索引に出さない(geminiと同じ扱い)。"""
+    import memory_tools as mt
+    cfg = {"llm": {"web_search": True, "provider": "codex",
+                    "providers": {"codex": {"type": "openai_codex_oauth"}}}}
+    spec = mt.build_tools_spec(cfg)
+    assert "web_search" not in spec
