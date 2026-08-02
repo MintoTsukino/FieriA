@@ -11,7 +11,7 @@
 # - console=False（黒窓なし）。デバッグ時は False→True にして stdout を見る
 # - frozen 時、config.py 等の HERE(__file__基準) は _internal/ を指す。
 #   ui/index.html 参照・fieria_home/ 自動生成は _internal/ 内で完結して整合する
-# - アイコン未指定（assets/が存在しないため。用意でき次第 icon=… を追加する）
+# - アイコン: fieria.ico（tools/draw_icon.py で生成。吹き出し×双葉×記憶の点）
 #
 # pypdfium2（PDF添付のページ画像化）: 実体のネイティブライブラリ(pdfium.dll)は
 # pypdfium2本体ではなく依存パッケージpypdfium2_rawが持つ。pyinstaller-hooks-contrib
@@ -58,6 +58,7 @@ exe = EXE(
     strip=False,
     upx=False,
     console=False,
+    icon="fieria.ico",
 )
 coll = COLLECT(
     exe,
