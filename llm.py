@@ -505,10 +505,11 @@ class XaiOAuthLLM(OpenAICompatLLM):
 
     def __init__(self, entry, api_key, temperature, max_tokens, reasoning_effort="", web_search=False):
         super().__init__(entry, api_key, temperature, max_tokens, reasoning_effort)
-        # FieriA拡張: Web検索（Grok Live Search）。search_parametersがサブスク
-        # OAuth経由で実際に効くかは未検証（xai_oauth.get_access_token()が返す
-        # トークンの権限範囲次第。通らない場合はAPI側がフィールドを無視するだけの
-        # 想定で、リクエスト自体が壊れることは想定していない——が保証はしない）。
+        # FieriA拡張: Web検索。旧Grok Live Search（search_parameters）は2026-08-02に
+        # API側で廃止され、フィールドを送るだけでHTTP 410で会話ごと失敗するように
+        # なった（"Live search is deprecated. Please switch to the Agent Tools API"）。
+        # 後継のAgent Tools APIは /v1/responses エンドポイント必須でチャット経路の
+        # 書き換えが必要なため未移行。web_search設定はGrokでは当面無効（送らない）。
         self.web_search = bool(web_search)
 
     def _headers(self):
@@ -516,8 +517,8 @@ class XaiOAuthLLM(OpenAICompatLLM):
         return {"Authorization": f"Bearer {xai_oauth.get_access_token()}"}
 
     def _extra_payload_fields(self):
-        if self.web_search:
-            return {"search_parameters": {"mode": "auto"}}
+        # search_parameters（Live Search）は廃止済み。送るとHTTP 410で全滅するため
+        # web_searchがONでも何も足さない（Agent Tools API移行までの暫定）。
         return {}
 
     def health(self):

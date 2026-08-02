@@ -200,7 +200,9 @@ def _xai_entry():
     return {"base_url": "https://api.x.ai/v1", "model": "grok-4.3"}
 
 
-def test_xai_oauth_chat_adds_search_parameters_when_enabled(monkeypatch):
+def test_xai_oauth_chat_never_sends_search_parameters_even_when_enabled(monkeypatch):
+    """旧Live Search（search_parameters）は2026-08-02にHTTP 410で廃止された。
+    web_searchがONでも送らないことが会話を守る条件（送ると全リクエスト失敗）。"""
     import xai_oauth
     monkeypatch.setattr(xai_oauth, "get_access_token", lambda: "tok")
     captured = {"response": {"choices": [{"message": {"content": "ok"}}]}}
@@ -208,7 +210,7 @@ def test_xai_oauth_chat_adds_search_parameters_when_enabled(monkeypatch):
     provider = llm.XaiOAuthLLM(_xai_entry(), api_key="", temperature=0.8, max_tokens=2000,
                                 web_search=True)
     provider.chat([{"role": "user", "content": "hi"}])
-    assert captured["payload"]["search_parameters"] == {"mode": "auto"}
+    assert "search_parameters" not in captured["payload"]
 
 
 def test_xai_oauth_chat_omits_search_parameters_when_disabled(monkeypatch):
@@ -222,14 +224,15 @@ def test_xai_oauth_chat_omits_search_parameters_when_disabled(monkeypatch):
     assert "search_parameters" not in captured["payload"]
 
 
-def test_xai_oauth_chat_stream_adds_search_parameters_when_enabled(monkeypatch):
+def test_xai_oauth_chat_stream_never_sends_search_parameters(monkeypatch):
+    """chat_stream側も同様に送らない（410廃止対応）。"""
     import xai_oauth
     monkeypatch.setattr(xai_oauth, "get_access_token", lambda: "tok")
     captured = _fake_stream(monkeypatch, ["data: [DONE]\n"])
     provider = llm.XaiOAuthLLM(_xai_entry(), api_key="", temperature=0.8, max_tokens=2000,
                                 web_search=True)
     list(provider.chat_stream([{"role": "user", "content": "hi"}]))
-    assert captured["payload"]["search_parameters"] == {"mode": "auto"}
+    assert "search_parameters" not in captured["payload"]
 
 
 # --- build_provider / create_llm 配線 ---
