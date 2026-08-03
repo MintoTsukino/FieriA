@@ -778,6 +778,46 @@ def _to_codex_input_msg(m):
     return {"role": m["role"], "content": content}
 
 
+# FieriA拡張: ネイティブfunction calling（Codex/Responses API）
+def _to_codex_tool(t):
+    """chat.completions形式のtool定義 {"type":"function","function":{"name",
+    "description","parameters"}} → Responses APIのフラット形式
+    {"type":"function","name","description","parameters"}へ変換する
+    （functionの入れ子が無い点だけが差分）。"""
+    fn = t.get("function") or {}
+    return {"type": "function", "name": fn.get("name") or "",
+            "description": fn.get("description") or "",
+            "parameters": fn.get("parameters") or {}}
+
+
+def _to_codex_input_items(m):
+    """chat.completions形の1メッセージ → Responses APIのinput配列への0件以上の
+    アイテム。ネイティブfunction calling用の分岐:
+    - role:"tool"（ツール実行結果） → function_call_outputアイテム1件
+    - assistant(tool_calls付き) → 本文があれば通常メッセージ1件＋呼び出し毎に
+      function_callアイテム（Responses APIは呼び出しをinputへ戻す際、
+      chat.completionsのようにassistantメッセージへ入れ子にせず、
+      function_callという独立アイテムとして並べる仕様のため）
+    それ以外は_to_codex_input_msgへ委譲（既存のuser/assistant/images処理）。"""
+    if m.get("role") == "tool":
+        return [{"type": "function_call_output",
+                 "call_id": m.get("tool_call_id"),
+                 "output": m.get("content") or ""}]
+    tool_calls = m.get("tool_calls")
+    if tool_calls:
+        items = []
+        if m.get("content"):
+            items.append({"role": m["role"], "content": m["content"]})
+        for tc in tool_calls:
+            fn = tc.get("function") or {}
+            items.append({"type": "function_call",
+                           "call_id": tc.get("id") or "",
+                           "name": fn.get("name") or "",
+                           "arguments": fn.get("arguments") or "{}"})
+        return items
+    return [_to_codex_input_msg(m)]
+
+
 class CodexOAuthLLM(_ChatStreamFallbackMixin):
     """ChatGPT Plus/ProのサブスクをOAuth経由で使うプロバイダ。OpenAI公式のResponses API
     （常にSSEで返る）を使う。OpenAICompatLLMは継承しない——リクエスト/レスポンス形式が
@@ -790,6 +830,9 @@ class CodexOAuthLLM(_ChatStreamFallbackMixin):
 
     CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
     FALLBACK_MODELS = ["gpt-5.5", "gpt-5.4-mini", "gpt-5.4", "gpt-5.3-codex", "gpt-5.3-codex-spark"]
+
+    # FieriA拡張: ネイティブfunction calling（engineの経路分岐が見るクラス能力フラグ）
+    supports_native_tools = True
 
     def __init__(self, entry, temperature, max_tokens, reasoning_effort="", web_search=False):
         self.model = entry.get("model", "gpt-5.5")
@@ -853,12 +896,25 @@ class CodexOAuthLLM(_ChatStreamFallbackMixin):
         except Exception:
             return list(self.FALLBACK_MODELS)
 
-    def _post_responses_sse(self, payload):
-        """/responses へPOSTする。web_search有効時のみ保険をかける：エンドポイントが
-        tools/web_searchを理由に拒否した（メッセージに"tools"か"web_search"を含む
-        HTTPエラー）場合、payloadからtoolsを外して1回だけリトライし検索なしで
-        会話を守る（Grok Live Search廃止＝HTTP 410全滅の教訓）。それ以外の例外は
-        そのまま送出する。"""
+    def _post_responses_sse(self, payload, has_function_tools=False):
+        """/responses へPOSTする。
+
+        has_function_tools=True（chat_tools経由・ネイティブfunction calling）の場合は
+        web_searchの保険リトライを行わない——function toolsはengine側の会話成立に
+        必須で、黙ってtoolsを外して成功させると呼び出しが消えたまま気づかず進む。
+        代わりにtools/function起因の拒否をNativeToolsUnsupportedへ変換して送出し、
+        engineがフェンス方式へフォールバックできるようにする。
+
+        has_function_tools=False（chat()のweb_search単体経路）は従来どおり：
+        web_search有効時のみ保険をかける。エンドポイントがtools/web_searchを理由に
+        拒否した（メッセージに"tools"か"web_search"を含むHTTPエラー）場合、payloadから
+        toolsを外して1回だけリトライし検索なしで会話を守る（Grok Live Search廃止＝
+        HTTP 410全滅の教訓）。それ以外の例外はそのまま送出する。"""
+        if has_function_tools:
+            try:
+                return _post_sse(f"{self.CODEX_BASE_URL}/responses", payload, headers=self._headers())
+            except Exception as e:
+                _raise_maybe_tools_unsupported(e)
         if not self.web_search:
             return _post_sse(f"{self.CODEX_BASE_URL}/responses", payload, headers=self._headers())
         try:
@@ -908,6 +964,63 @@ class CodexOAuthLLM(_ChatStreamFallbackMixin):
         if not text:
             raise RuntimeError(f"Codex応答が空: {json.dumps(response_obj, ensure_ascii=False)[:200]}")
         return text
+
+    # FieriA拡張: ネイティブfunction calling
+    def chat_tools(self, messages, tools, max_tokens=None):
+        """ネイティブtoolsつきの1回呼び出し。戻り値の形はOpenAICompatLLM.chat_toolsと
+        同じ{"text": str, "tool_calls": [{"id","name","arguments"(dict)}]}——engineには
+        Responses API固有の形（フラットtools・function_call/function_call_outputアイテム）
+        を一切漏らさず、入口（tools定義・messages）と出口（output配列）の両方向を
+        ここで変換する。
+
+        chat()と違い、本文が空でも例外にしない——function呼び出しだけで本文が無い
+        ターンは正常（engine側がtool_callsの有無で分岐する）。"""
+        system_text = next((m["content"] for m in messages if m["role"] == "system"), "")
+        codex_tools = [_to_codex_tool(t) for t in tools]
+        if self.web_search:
+            codex_tools = [{"type": "web_search"}] + codex_tools
+        input_items = []
+        for m in messages:
+            if m["role"] == "system":
+                continue
+            input_items.extend(_to_codex_input_items(m))
+        payload = {
+            "model": self.model,
+            "instructions": system_text,
+            "store": False,
+            "stream": True,
+            "input": input_items,
+            "tools": codex_tools,
+        }
+        if self.reasoning_effort:
+            payload["reasoning"] = {"effort": self.reasoning_effort}
+        raw = self._post_responses_sse(payload, has_function_tools=True)
+
+        response_obj = _extract_sse_final_response(raw)
+        status = str(response_obj.get("status") or "").lower()
+        if status in ("failed", "cancelled"):
+            error = response_obj.get("error")
+            detail = error.get("message") if isinstance(error, dict) else None
+            raise RuntimeError(
+                f"Codex応答が失敗（status={status}）: "
+                f"{detail or json.dumps(error, ensure_ascii=False)[:200]}"
+            )
+
+        text = _extract_sse_delta_text(raw) or _responses_output_text(response_obj)
+        calls = []
+        for item in response_obj.get("output", []) or []:
+            if not isinstance(item, dict) or item.get("type") != "function_call":
+                continue
+            raw_args = item.get("arguments") or "{}"
+            try:
+                args = json.loads(raw_args)
+                if not isinstance(args, dict):
+                    args = {"__raw": raw_args}
+            except (json.JSONDecodeError, ValueError):
+                args = {"__raw": raw_args}
+            calls.append({"id": item.get("call_id") or "", "name": item.get("name") or "",
+                           "arguments": args})
+        return {"text": text, "tool_calls": calls}
 
 
 def _is_free_openrouter_model(m):

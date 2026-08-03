@@ -239,3 +239,132 @@ def test_chat_tools_stream_no_should_stop_reads_all_chunks(monkeypatch):
     result = _mk().chat_tools_stream([{"role": "user", "content": "hi"}], TOOLS)
 
     assert result["text"] == "12"
+
+
+# --- CodexOAuthLLM: ネイティブfunction calling（Responses API・test_llm_web_search.py
+# のCodexセクションと同じ流儀: llm._post_sse をmonkeypatchし、openai_codex_oauthの
+# ログイン状態もfakeする） ---
+
+def _codex_entry():
+    return {"model": "gpt-5.5"}
+
+
+def _fake_codex_login(monkeypatch):
+    import openai_codex_oauth
+    monkeypatch.setattr(openai_codex_oauth, "get_access_token", lambda: "tok")
+    monkeypatch.setattr(openai_codex_oauth, "get_account_id", lambda: "acct")
+
+
+def _codex_final_sse(output, status="completed"):
+    """response.completedイベント1個だけのSSE文字列。output配列に任意のアイテム
+    （function_call等）を積めるようにしたテスト用ヘルパー。"""
+    return "data: " + json.dumps({"response": {"status": status, "output": output}}) + "\n\n"
+
+
+def _mk_codex(**kwargs):
+    return llm.CodexOAuthLLM(_codex_entry(), temperature=0.8, max_tokens=2000, **kwargs)
+
+
+def test_codex_chat_tools_sends_flat_tool_definitions(monkeypatch):
+    """chat.completions形（type/function入れ子）→ Responses APIのフラット形へ変換される。"""
+    _fake_codex_login(monkeypatch)
+    captured = {}
+
+    def fake_post_sse(url, payload, headers=None, timeout=120):
+        captured["payload"] = payload
+        return _codex_final_sse([])
+
+    monkeypatch.setattr(llm, "_post_sse", fake_post_sse)
+
+    _mk_codex().chat_tools([{"role": "user", "content": "hi"}], TOOLS)
+
+    assert captured["payload"]["tools"] == [
+        {"type": "function", "name": "write_wiki", "description": "d",
+         "parameters": {"type": "object", "properties": {}, "required": []}}]
+
+
+def test_codex_chat_tools_parses_function_call_output_into_tool_calls(monkeypatch):
+    """response.completedのoutput配列のfunction_callアイテム→chat.completions形tool_calls。"""
+    _fake_codex_login(monkeypatch)
+
+    def fake_post_sse(url, payload, headers=None, timeout=120):
+        return _codex_final_sse([
+            {"type": "function_call", "call_id": "call_1", "name": "write_wiki",
+             "arguments": '{"topic": "T", "content": "C"}'},
+        ])
+
+    monkeypatch.setattr(llm, "_post_sse", fake_post_sse)
+
+    result = _mk_codex().chat_tools([{"role": "user", "content": "hi"}], TOOLS)
+
+    assert result["tool_calls"] == [
+        {"id": "call_1", "name": "write_wiki",
+         "arguments": {"topic": "T", "content": "C"}}]
+    assert result["text"] == ""
+
+
+def test_codex_chat_tools_converts_tool_role_message_to_function_call_output(monkeypatch):
+    """exchangeのrole:"tool"メッセージがinput配列のfunction_call_outputアイテムへ、
+    assistant(tool_calls)がfunction_callアイテムへ変換されて送られる。"""
+    _fake_codex_login(monkeypatch)
+    captured = {}
+
+    def fake_post_sse(url, payload, headers=None, timeout=120):
+        captured["payload"] = payload
+        return _codex_final_sse([])
+
+    monkeypatch.setattr(llm, "_post_sse", fake_post_sse)
+    msgs = [
+        {"role": "user", "content": "やって"},
+        {"role": "assistant", "content": None,
+         "tool_calls": [{"id": "c1", "type": "function",
+                          "function": {"name": "write_wiki", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "ok: 書いた"},
+    ]
+
+    _mk_codex().chat_tools(msgs, TOOLS)
+
+    sent = captured["payload"]["input"]
+    assert {"type": "function_call", "call_id": "c1", "name": "write_wiki",
+            "arguments": "{}"} in sent
+    assert {"type": "function_call_output", "call_id": "c1", "output": "ok: 書いた"} in sent
+
+
+def test_codex_chat_tools_web_search_coexists_with_function_tools(monkeypatch):
+    """web_search ONのとき、toolsにweb_searchとfunction定義が両方入る。"""
+    _fake_codex_login(monkeypatch)
+    captured = {}
+
+    def fake_post_sse(url, payload, headers=None, timeout=120):
+        captured["payload"] = payload
+        return _codex_final_sse([])
+
+    monkeypatch.setattr(llm, "_post_sse", fake_post_sse)
+
+    _mk_codex(web_search=True).chat_tools([{"role": "user", "content": "hi"}], TOOLS)
+
+    assert {"type": "web_search"} in captured["payload"]["tools"]
+    assert {"type": "function", "name": "write_wiki", "description": "d",
+            "parameters": {"type": "object", "properties": {}, "required": []}
+            } in captured["payload"]["tools"]
+
+
+def test_codex_supports_native_tools_flag():
+    assert llm.CodexOAuthLLM.supports_native_tools is True
+
+
+def test_codex_chat_tools_tools_rejection_raises_typed_error(monkeypatch):
+    """function tools起因の拒否は、web_searchのような黙ったリトライではなく
+    NativeToolsUnsupportedを投げる（呼び出しが消えたまま気づかず進むのを防ぐ）。"""
+    _fake_codex_login(monkeypatch)
+
+    def fake_post_sse(url, payload, headers=None, timeout=120):
+        raise RuntimeError('HTTP 400: {"error": "tools is not supported for this model"}')
+
+    monkeypatch.setattr(llm, "_post_sse", fake_post_sse)
+
+    try:
+        _mk_codex().chat_tools([{"role": "user", "content": "hi"}], TOOLS)
+        assert False, "例外が出るはず"
+    except llm.NativeToolsUnsupported:
+        pass
