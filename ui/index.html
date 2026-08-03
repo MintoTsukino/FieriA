@@ -564,19 +564,9 @@
     padding: 8px 10px; border-radius: 10px;
   }
   .list-item:hover { background: var(--bg); }
-  /* SOULごとの追加事実欄を持つ行だけの外枠。.list-item自体はロール一覧とも
-     共有する横並びレイアウトなので、ここでは変更せず外側に1枚重ねる。 */
-  .soul-row { padding: 2px 0; border-radius: 10px; }
-  .soul-row:hover { background: var(--bg); }
-  .soul-row .list-item:hover { background: transparent; }
   .list-item .name { font-size: 14px; }
   .list-item .name.active-tag::after { content: " ・使用中"; color: var(--fg-dim); font-size: 12px; }
   .list-item .btns { display: flex; gap: 6px; }
-  .soul-fact-override {
-    width: 100%; margin-top: 6px; font-size: 12px;
-    background: var(--bg2); color: var(--fg); border: 1px solid var(--line);
-    border-radius: 8px; padding: 6px 8px; box-sizing: border-box;
-  }
   .hint { font-size: 12px; color: var(--fg-dim); margin-top: 4px; }
   #model-list-box {
     max-height: 200px; overflow-y: auto; border: 1px solid var(--line);
@@ -969,6 +959,11 @@
           <div class="row" style="align-items:flex-start;">
             <label>口調</label>
             <textarea class="small" id="new-soul-speech" placeholder="口調・話し方のクセ（任意）。例: 語尾に〜じょをつける、タメ口"></textarea>
+          </div>
+          <div class="row" id="new-soul-fact-override-row" style="align-items:flex-start; display:none;">
+            <label>追加事実</label>
+            <textarea class="small" id="new-soul-fact-override"
+                      placeholder="このSOULだけの追加事実（任意。このSOULだけの経緯・立場があれば書く）"></textarea>
           </div>
           <div class="row" id="new-soul-inherit-row" style="display:none;">
             <label>ユーザー理解を引き継ぐ</label>
@@ -3302,6 +3297,8 @@ function renderMarkdownToHtml(raw) {
     $("new-soul-name").disabled = false;
     $("new-soul-identity").value = "";
     $("new-soul-speech").value = "";
+    $("new-soul-fact-override").value = "";
+    $("new-soul-fact-override-row").style.display = "none";
     $("new-soul-inherit-user").value = "";
     $("create-soul-btn").textContent = "SOULを作る";
     renderInheritUserOptions();
@@ -3343,8 +3340,6 @@ function renderMarkdownToHtml(raw) {
     box.innerHTML = "";
     renderInheritUserOptions();
     state.souls.forEach(function (s) {
-      var wrap = document.createElement("div");
-      wrap.className = "soul-row";
       var row = document.createElement("div");
       row.className = "list-item";
       var name = document.createElement("span");
@@ -3437,6 +3432,15 @@ function renderMarkdownToHtml(raw) {
           $("new-soul-name").disabled = false;
           $("new-soul-identity").value = parts.core;
           $("new-soul-speech").value = parts.speech_style;
+          // SOULごとの事実層の追加（fact_layer_overrides・2026-08-03）。identity・
+          // 口調と同じく「編集を開いたときだけ」出す（実機フィードバック: 全SOUL行に
+          // 常時出すと選んでいないSOULの分までうるさい）。グローバルの事実文は
+          // そのまま、このSOULだけへ上乗せする一言を自由記述で持てる
+          // （soul_llmと同じ「configにsoul_idをキーに持つ」形。書き込み先はSOULの
+          // 記憶ファイルではなくconfigなので、update_soul_identityとは別経路）。
+          var overrides = (state.settings && state.settings.fact_layer_overrides) || {};
+          $("new-soul-fact-override").value = overrides[s.id] || "";
+          $("new-soul-fact-override-row").style.display = "";
           $("create-soul-btn").textContent = "SOULを更新";
           renderInheritUserOptions();
           updateEngineLockButtons();
@@ -3444,37 +3448,7 @@ function renderMarkdownToHtml(raw) {
       });
       btns.appendChild(editBtn);
       row.appendChild(btns);
-      wrap.appendChild(row);
-      // SOULごとの事実層の追加（fact_layer_overrides・2026-08-03）。グローバルの
-      // 事実文はそのまま、このSOULだけに上乗せする一言を自由記述で持てる
-      // （soul_llmと同じ「configにsoul_idをキーに持つ」形。書き込み先はSOULの
-      // 記憶ファイルではなくconfigなので、update_soul_identityとは別経路）。
-      if (state.settings) {
-        var overrides = state.settings.fact_layer_overrides || {};
-        var factInput = document.createElement("input");
-        factInput.type = "text";
-        factInput.className = "soul-fact-override";
-        factInput.placeholder = "このSOULだけの追加事実（任意。例: あなたはブラウザから引っ越してきたニコイ）";
-        factInput.value = overrides[s.id] || "";
-        factInput.addEventListener("blur", function () {
-          var next = factInput.value;
-          if (next === (overrides[s.id] || "")) return;  // 変化が無ければ保存しない
-          var nextOverrides = JSON.parse(JSON.stringify(state.settings.fact_layer_overrides || {}));
-          if (next.trim()) {
-            nextOverrides[s.id] = next;
-          } else {
-            delete nextOverrides[s.id];
-          }
-          window.pywebview.api.save_settings({ fact_layer_overrides: nextOverrides }).then(function (data) {
-            state.settings = data;
-            showToast("追加事実を保存した");
-          }).catch(function (err) {
-            showToast("保存に失敗した: " + err, "error");
-          });
-        });
-        wrap.appendChild(factInput);
-      }
-      box.appendChild(wrap);
+      box.appendChild(row);
     });
   }
 
@@ -3484,15 +3458,27 @@ function renderMarkdownToHtml(raw) {
     if (editingSoulId) {
       var editedId = editingSoulId;
       var newName = $("new-soul-name").value;
+      // SOULごとの事実層の追加。identity・口調と同じ編集フォームに乗っているが、
+      // 保存先はSOULの記憶ファイルではなくconfig（save_settings）なので別APIになる。
+      var factOverrideText = $("new-soul-fact-override").value;
+      var nextFactOverrides = JSON.parse(JSON.stringify(
+        (state.settings && state.settings.fact_layer_overrides) || {}));
+      if (factOverrideText.trim()) {
+        nextFactOverrides[editedId] = factOverrideText;
+      } else {
+        delete nextFactOverrides[editedId];
+      }
       // 改名(rename_soul)とidentity/speech更新(update_soul_identity)は別APIなので
       // 両方呼ぶ。片方が失敗してももう片方の結果は反映されうるため、エラーは
       // まとめて集約して1回のトーストで報告する。
       Promise.all([
         window.pywebview.api.rename_soul(editedId, newName),
         window.pywebview.api.update_soul_identity(editedId, identity, speech),
+        window.pywebview.api.save_settings({ fact_layer_overrides: nextFactOverrides }),
       ]).then(function (results) {
         var renameResult = results[0];
         var identityResult = results[1];
+        state.settings = results[2];
         if (renameResult && renameResult.ok && renameResult.name !== undefined) {
           var entry = state.souls.find(function (s) { return s.id === editedId; });
           if (entry) entry.name = renameResult.name || "（名前未定）";
