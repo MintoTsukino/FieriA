@@ -205,3 +205,29 @@ def test_migrate_legacy_noop():
     new_md, new_done, n = ts.migrate_legacy(CANON, "", "2026-08-04")
     assert n == 0
     assert new_done == ""
+
+
+def test_restore_done_preserves_other_entries():
+    """複数エントリのdone_mdから1件だけ復帰させても、他の行（見出し・
+    他の完了エントリ・日付なし遺産行）が無傷で残ること"""
+    done = ("# tasks done\n"
+            "- ✓ 昔の分 ｜完了 2026-08-01\n"
+            "- ✓ 対象 ｜執筆 ｜完了 2026-08-04\n"
+            "- ✓ 遺産行（日付なし）\n"
+            "- ✓ 同日の別タスク ｜完了 2026-08-04\n")
+    md, done2 = ts.restore_done("# tasks\n", done, "対象", "2026-08-04")
+    assert ts.parse_tasks(md)["now"][0]["text"] == "対象"
+    assert "# tasks done" in done2
+    assert "昔の分" in done2
+    assert "遺産行（日付なし）" in done2
+    assert "同日の別タスク" in done2
+    assert "対象 ｜執筆" not in done2
+
+
+def test_migrate_legacy_multiple_lines():
+    """✓行が複数あっても全件がtasks_done.mdへ移ること"""
+    md = "- A（✓済）\n- B ✓済 2026-07-01\n- 残るタスク\n"
+    new_md, new_done, n = ts.migrate_legacy(md, "", "2026-08-04")
+    assert n == 2
+    assert "A（✓済）" in new_done and "B ✓済 2026-07-01" in new_done
+    assert [t["text"] for t in ts.parse_tasks(new_md)["future"]] == ["残るタスク"]
