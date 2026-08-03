@@ -141,7 +141,8 @@ SCHEMAS = {
     "read_pdf": {
         "description": "作業フォルダのPDFを読む",
         "parameters": _p({"path": _s("相対パス"),
-                          "mode": {"type": "string", "description": "text=テキスト抽出/省略時=ページ画像"},
+                          "mode": {"type": "string", "enum": ["text", "image"],
+                                    "description": "text=テキスト抽出/image・省略時=ページ画像"},
                           "start_page": {"type": "integer", "description": "開始ページ"},
                           "max_pages": {"type": "integer", "description": "最大ページ数"}},
                          ["path"]),

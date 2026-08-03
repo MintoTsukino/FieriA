@@ -1,7 +1,9 @@
 """memory_tools.py — hot pathツール（会話中に本人が記憶を書く）。
-プロンプトベース方式: 応答内の ```fieria-tool``` ブロックのJSONをパースして実行する。
-native function calling不使用（プロバイダ非依存・NikoVoiceの一括更新JSONで実績ある型）。
-実行失敗は {"ok": False} で返し、例外で会話を壊さない(設計書§8-3)。"""
+呼び出しの受け取り方は2系統: (1)フェンス方式＝応答内の ```fieria-tool``` ブロックの
+JSONをパース（プロバイダ非依存のフォールバック） (2)ネイティブ方式＝APIのtools
+チャンネル（build_native_tools/tools_schema.py参照・2026-08-04〜）。
+実行体はどちらもexecute()一本。実行失敗は {"ok": False} で返し、
+例外で会話を壊さない(設計書§8-3)。"""
 import base64
 import datetime
 import json
