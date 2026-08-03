@@ -175,6 +175,14 @@ class Engine:
         """
         self.messages = []
 
+    def compact_now(self):
+        """手動圧縮（GUIの圧縮ボタン）。自動圧縮(_compact)と同じ処理を、文脈上限の
+        閾値と無関係に実行する。停止直後は_stop_requestedがTrueのまま残っている
+        （process_turnの冒頭でしかリセットされない）ため、手動実行では明示的に
+        下ろしてから呼ぶ——ユーザーがボタンを押した意思の方が新しい。"""
+        self._stop_requested = False
+        return self._compact()
+
     def _compact(self):
         """会話履歴（self.messages）の古い前半をLLMによる要約1件に畳んで後半と連結する。
 

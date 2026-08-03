@@ -443,6 +443,26 @@ class Bridge:
         self._engine.reset_context()
         return {"ok": True}
 
+    def compact_context(self):
+        """手動圧縮（圧縮ボタン）: 会話履歴の古い前半をLLM要約1件に畳む。
+        区切り（全消し）と違い、話の流れは要約として残るので会話を続けられる。
+        ログ・記憶ファイルには一切触れない（engine.messagesだけの操作）。
+        要約にLLMを1回呼ぶため、会話・インポート・定期処理との排他は
+        send_message等と同じ判定で弾く。"""
+        if not self._engine:
+            return {"ok": False, "detail": "SOULが未作成"}
+        with self._busy_lock:
+            if self._busy_turns > 0 or self._importing:
+                return {"ok": False, "detail": "ほかの処理中は圧縮できない"}
+        if self._scheduler.is_running_job():
+            return {"ok": False, "detail": "定期処理の実行中は圧縮できない"}
+        if len(self._engine.messages) < 2:
+            return {"ok": False, "detail": "圧縮するほど会話が溜まっていない"}
+        result = self._engine.compact_now()
+        if not result:
+            return {"ok": False, "detail": "圧縮に失敗した（会話はそのまま）"}
+        return {"ok": True, "detail": result["detail"]}
+
     # --- PDF添付（ページを画像化してvision添付フローに乗せる） ---
     def pdf_native_supported(self):
         """現在選択中のLLMプロバイダがPDFをネイティブに読める（Gemini）かどうか。

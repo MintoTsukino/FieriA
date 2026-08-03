@@ -2678,3 +2678,95 @@ def test_write_soul_file_can_edit_identity_and_prompt_still_omits_when_emptied()
     assert parts["core"] == ""
     text = prompt.build_system_text({"fact_layer": {"enabled": False}}, sid)
     assert "わたしはテト" not in text
+
+
+# --- 手動圧縮（圧縮ボタン） 2026-08-04 ---
+# 自動圧縮(engine._compact)はcontext_limit_tokens超過時にしか走らない。
+# 「区切り（全消し）はあるが、要約して続ける手段が無い」の穴を埋める手動の口。
+
+class _CompactFakeLLM:
+    def __init__(self, reply="要約: これまでの話のまとめ"):
+        self.reply = reply
+        self.calls = 0
+
+    def chat(self, messages, max_tokens=None):
+        self.calls += 1
+        if isinstance(self.reply, Exception):
+            raise self.reply
+        return self.reply
+
+
+def _bridge_with_history(n_messages=6):
+    import engine as engine_mod
+    import gui
+    import soul
+    b = gui.Bridge()
+    sid = soul.create_soul("圧縮ボタンテスト")
+    b._cfg["active_soul"] = sid
+    llm = _CompactFakeLLM()
+    b._llm = llm
+    b._engine = engine_mod.Engine(b._cfg, llm, sid)
+    for i in range(n_messages):
+        role = "user" if i % 2 == 0 else "assistant"
+        b._engine.messages.append({"role": role, "content": f"発言{i}"})
+    return b, llm
+
+
+def test_compact_context_summarizes_old_half():
+    b, llm = _bridge_with_history(6)
+
+    result = b.compact_context()
+
+    assert result["ok"] is True
+    assert llm.calls == 1
+    assert len(b._engine.messages) < 6
+    assert "要約" in b._engine.messages[0]["content"]
+
+
+def test_compact_context_without_engine_errors():
+    import gui
+    b = gui.Bridge()
+    b._engine = None
+
+    assert b.compact_context()["ok"] is False
+
+
+def test_compact_context_with_short_history_reports_nothing_to_do():
+    b, llm = _bridge_with_history(1)
+
+    result = b.compact_context()
+
+    assert result["ok"] is False
+    assert llm.calls == 0  # LLMを無駄に呼ばない
+
+
+def test_compact_context_blocked_while_busy():
+    b, llm = _bridge_with_history(6)
+    b._busy_turns = 1
+
+    result = b.compact_context()
+
+    assert result["ok"] is False
+    assert llm.calls == 0
+    assert len(b._engine.messages) == 6  # 何も変わっていない
+
+
+def test_compact_context_llm_failure_keeps_history():
+    b, llm = _bridge_with_history(6)
+    llm.reply = RuntimeError("api down")
+
+    result = b.compact_context()
+
+    assert result["ok"] is False
+    assert len(b._engine.messages) == 6
+
+
+def test_compact_context_works_after_a_stopped_turn():
+    """停止直後は_engine._stop_requestedがTrueのまま残る。手動圧縮はそれに
+    引きずられず動くこと（自動圧縮との分岐点）。"""
+    b, llm = _bridge_with_history(6)
+    b._engine._stop_requested = True
+
+    result = b.compact_context()
+
+    assert result["ok"] is True
