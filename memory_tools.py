@@ -238,6 +238,13 @@ _TOOL_ONELINERS = {
                         '{"tool":"describe_tools","tools":["read_doc"]}'),
 }
 
+# 実在するツール名の全体集合。フェンス無しの裸JSONを「ツール呼び出しか、ただの
+# JSONの話か」を見分ける唯一の手がかりに使う（extract_tool_calls参照）。
+# 3つの集合の和にしてあるのは、索引に1行が載らないツール（create_skill等）を
+# 取りこぼさないため——ここが実態からずれると、モデルが正しく呼んでいるのに
+# 黙って本文へ落ちる、という一番わかりにくい壊れ方をする。
+KNOWN_TOOL_NAMES = frozenset(_TOOL_ONELINERS) | MEMORY_WRITE_TOOLS | FEEDBACK_TOOLS
+
 _INDEX_HEADER = """## 記憶ツール（索引）
 応答中に下記ブロックを含めれば使える（本文はそのまま届く。一部は次のターンで結果が渡る）:
 
@@ -586,8 +593,57 @@ def extract_tool_calls(reply_text):
         last = end
     parts.append(reply_text[last:])
     clean = "".join(parts)
+    clean, bare_calls = _extract_bare_calls(clean)
+    calls.extend(bare_calls)
     clean = re.sub(r"\n{3,}", "\n\n", clean).strip()
     return clean, calls
+
+
+def _extract_bare_calls(text):
+    """フェンス（```fieria-tool）を付けずに裸のJSONを本文へ書くモデルを救う。
+
+    実機（DeepSeek, 2026-08-03）が一貫してフェンスを付けず、結果として
+    「記憶は一切書かれないのにJSONだけがチャットに丸見え」という状態になった。
+    フェンスの表記ゆれ許容（2026-07-23）と同じ考え方の延長で、受け取り側を広げる。
+
+    ただの「JSONの話」を誤って実行しないための条件は2つ:
+    1. その行の中でJSONが最初（行頭。前は空白のみ）——本物の呼び出しは必ず
+       単独行に来る。文中の `{"tool":...}` のような引用は行頭にならないので残る
+    2. dictで、"tool"の値がKNOWN_TOOL_NAMESに実在する
+
+    壊れたJSONは__parse_error__にせず本文へ残す。フェンスがある場合と違い
+    「呼んだつもりだった」と断定できないため（フェンス付きの壊れは呼ぶ意図が
+    明確なので差し戻す、という既存の使い分けを保つ）。
+    """
+    calls = []
+    removals = []
+    pos = 0
+    while True:
+        i = text.find("{", pos)
+        if i < 0:
+            break
+        line_start = text.rfind("\n", 0, i) + 1
+        if text[line_start:i].strip():
+            pos = i + 1  # 行頭ではない＝文中の引用。触らない
+            continue
+        try:
+            obj, end = _decoder.raw_decode(text, i)
+        except (json.JSONDecodeError, ValueError):
+            pos = i + 1
+            continue
+        if isinstance(obj, dict) and obj.get("tool") in KNOWN_TOOL_NAMES:
+            calls.append(obj)
+            removals.append((i, end))
+        pos = end
+    if not removals:
+        return text, calls
+    parts = []
+    last = 0
+    for start, end in removals:
+        parts.append(text[last:start])
+        last = end
+    parts.append(text[last:])
+    return "".join(parts), calls
 
 
 def execute(soul_id, call, cfg=None):

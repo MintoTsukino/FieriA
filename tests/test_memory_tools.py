@@ -1678,3 +1678,121 @@ def test_build_tools_spec_omits_web_search_for_codex_oauth():
                     "providers": {"codex": {"type": "openai_codex_oauth"}}}}
     spec = mt.build_tools_spec(cfg)
     assert "web_search" not in spec
+
+
+# --- フェンス無しの裸JSONもツール呼び出しとして拾う 2026-08-03 ---
+# 実機（DeepSeek）が ```fieria-tool フェンスを付けず、裸のJSONを本文に流していた。
+# 結果、記憶は一切書かれないのにJSONだけがチャットに丸見えで出ていた。
+
+def test_bare_json_on_own_line_is_treated_as_tool_call():
+    import memory_tools
+    reply = '''ふう、今度こそ書けたはずにゃ！
+
+{"tool":"write_wiki","topic":"ニコイとの出会い","content":"本文じょ","mode":"append"}
+
+どうかにゃ？'''
+
+    clean, calls = memory_tools.extract_tool_calls(reply)
+
+    assert len(calls) == 1
+    assert calls[0]["tool"] == "write_wiki"
+    assert calls[0]["topic"] == "ニコイとの出会い"
+    assert '"tool"' not in clean  # 本文からJSONが消える（丸見え問題の解消）
+    assert "今度こそ書けたはずにゃ" in clean
+    assert "どうかにゃ" in clean
+
+
+def test_bare_json_inline_in_prose_is_left_alone():
+    """文中でツールの書き方を説明しているだけの引用は実行しない。
+    本物の呼び出しは必ず行頭に来るので、行頭かどうかで区別する。"""
+    import memory_tools
+    reply = 'こういう風に `{"tool":"write_wiki","topic":"例","content":"例"}` って書くんじょ'
+
+    clean, calls = memory_tools.extract_tool_calls(reply)
+
+    assert calls == []
+    assert '"tool"' in clean
+
+
+def test_bare_json_with_unknown_tool_name_is_left_alone():
+    import memory_tools
+    reply = '''設定はこれじゃ
+
+{"tool":"launch_missiles","target":"月"}
+'''
+
+    clean, calls = memory_tools.extract_tool_calls(reply)
+
+    assert calls == []
+    assert "launch_missiles" in clean
+
+
+def test_bare_json_without_tool_key_is_left_alone():
+    import memory_tools
+    reply = '''JSONの例じょ
+
+{"name":"コノハ","age":1}
+'''
+
+    clean, calls = memory_tools.extract_tool_calls(reply)
+
+    assert calls == []
+    assert '"name"' in clean
+
+
+def test_bare_json_broken_is_left_in_body_not_parse_error():
+    """フェンスが無い以上「呼んだつもり」と断定できないので、壊れたJSONは
+    __parse_error__にせず本文へ残す（フェンス付きの壊れとは扱いを変える）。"""
+    import memory_tools
+    reply = '''こんなの
+
+{"tool":"write_wiki", ここで壊れとる
+'''
+
+    clean, calls = memory_tools.extract_tool_calls(reply)
+
+    assert calls == []
+    assert "ここで壊れとる" in clean
+
+
+def test_fenced_and_bare_calls_both_collected():
+    import memory_tools
+    reply = '''まず1本目
+
+```fieria-tool
+{"tool":"write_wiki","topic":"A","content":"a"}
+```
+
+そんで2本目
+
+{"tool":"save_sacred","text":"大事な言葉"}
+'''
+
+    clean, calls = memory_tools.extract_tool_calls(reply)
+
+    assert [c["tool"] for c in calls] == ["write_wiki", "save_sacred"]
+    assert '"tool"' not in clean
+
+
+def test_multiple_bare_calls_in_one_reply():
+    import memory_tools
+    reply = '''2本書くじょ
+
+{"tool":"write_wiki","topic":"A","content":"a"}
+
+{"tool":"update_memory_index","line":"- [A](wiki/A.md) — あれ"}
+'''
+
+    clean, calls = memory_tools.extract_tool_calls(reply)
+
+    assert [c["tool"] for c in calls] == ["write_wiki", "update_memory_index"]
+
+
+def test_bare_json_indented_still_counts():
+    """行頭の空白は許す（インデントして出すモデルがある）。"""
+    import memory_tools
+    reply = 'にゃ\n\n    {"tool":"save_sacred","text":"約束"}\n'
+
+    _clean, calls = memory_tools.extract_tool_calls(reply)
+
+    assert [c["tool"] for c in calls] == ["save_sacred"]
