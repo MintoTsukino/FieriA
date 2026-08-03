@@ -510,3 +510,57 @@ def test_vector_count_zero_without_table_and_counts_after_update(monkeypatch):
                         lambda u, m, texts, batch=32: [[1.0, 0.0] for _ in texts])
     search.update_vectors(sid, {"enabled": True, "engine_url": "http://x", "model": "m"})
     assert search.vector_count(sid) > 0
+
+
+# --- imported/（インポートの原本控え）は検索対象から除外 2026-08-04 ---
+# importer.py: 「原文は無改変のままsouls/<id>/imported/へ移す」。この原本と、
+# AIが整理したwiki側の内容は同じ話題が2重に索引される（実機フィードバック:
+# 連想記憶が原本の生テキストと整理済みwikiの両方をヒットさせてノイズになる）。
+# backupsと同じ扱いで、imported/配下は索引対象から外す。
+
+def test_search_excludes_imported_originals():
+    import search, soul
+    sid = _sid()
+    soul.write_file(sid, "imported/むかしの日記.md", "きょうはインベントリUIの話をみんとちゃんとした。8枠で決着。")
+    search.ensure_index(sid)
+    hits = search.search(sid, "インベントリ")
+    assert hits == []
+
+
+def test_search_excludes_nested_imported_originals():
+    """importer.pyのimported/は常にフラットだが、diary_import等の別経路がサブフォルダ
+    （imported/diary/等）を作る場合にも同じ扱いにする（`d != "backups"`と同じ深さ非依存の除外）。"""
+    import search, soul
+    sid = _sid()
+    soul.write_file(sid, "imported/diary/2026-07-01.md", "インベントリUIの話が出た日。")
+    search.ensure_index(sid)
+    assert search.search(sid, "インベントリ") == []
+
+
+def test_search_still_finds_wiki_when_imported_has_same_topic():
+    """除外の副作用でwiki側まで消えないこと（今回の狙いは重複解消であって全消しではない）。"""
+    import search, soul
+    sid = _sid()
+    soul.write_file(sid, "imported/むかしの日記.md", "インベントリUIの生の記録。")
+    soul.write_file(sid, "wiki/UI談義.md", "インベントリUIについて整理した内容。8枠で決着。")
+    search.ensure_index(sid)
+    hits = search.search(sid, "インベントリ")
+    assert [h["source"] for h in hits] == ["wiki/UI談義.md"]
+
+
+def test_update_vectors_skips_imported_originals(monkeypatch):
+    """FTSだけでなく意味検索（埋め込み）側もimported/を対象外にする
+    （_target_filesを両者が共用しているため、片方だけ直すと片手落ちになる）。"""
+    import search, soul
+    sid = _sid()
+    calls = []
+    monkeypatch.setattr(search.embed, "embed_texts_batched", _fake_embed_batched(calls=calls))
+    cfg = {"engine_url": "http://127.0.0.1:11434", "model": "m"}
+    search.update_vectors(sid, cfg)  # 既定ファイル群を先に埋め込み切る
+    calls.clear()
+
+    soul.write_file(sid, "imported/むかしの日記.md", "本文その1。ここに文章がある。")
+    result = search.update_vectors(sid, cfg)
+
+    assert result == {"done": 0, "pending": 0}
+    assert calls == []

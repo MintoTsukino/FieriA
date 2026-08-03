@@ -51,7 +51,11 @@ def _target_files(base_dir):
     """soul_dir配下の索引対象ファイル一覧（'/'区切りの相対パス、ソート済み）を返す。"""
     targets = []
     for root, dirs, files in os.walk(base_dir):
-        dirs[:] = [d for d in dirs if d != "backups"]
+        # importedはMDインポートの原本控え（importer.py: 「原文は無改変のまま
+        # imported/へ移す」）。wiki側にAIが整理した内容が既にあるため、原本まで
+        # 索引に入れると同じ話題が生テキストと整理済み版で二重ヒットしてしまう
+        # （2026-08-04・実機フィードバック）。backupsと同じ深さ非依存の除外にする。
+        dirs[:] = [d for d in dirs if d not in ("backups", "imported")]
         for fname in files:
             if fname == INDEX_FILENAME or fname.startswith(INDEX_FILENAME + "-"):
                 continue  # index.sqlite本体・-journal/-wal等の副産物
