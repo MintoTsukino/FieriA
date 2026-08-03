@@ -369,6 +369,48 @@ def build_tools_spec(cfg, soul_id=None):
     return "\n\n".join(sections)
 
 
+import tools_schema
+
+# ネイティブ経路でツール索引の代わりに注入する注意文。フェンスの書式説明は
+# 入れない（ツールの呼び方はAPIのtoolsチャンネルが伝えるため、本文内JSONの
+# 作法を同時に教えると二重の作法になり混乱する）。書く内容の規範だけを残す。
+NATIVE_SPEC_NOTE = """## 記憶ツールについて
+ツールで自分の記憶ファイルを読み書きできる（定義はツール一覧参照）。
+- 「書いた」「覚えた」「保存した」と言ってよいのは、実際にツールを呼んだときだけ
+- 書く内容の規範: 相手の言葉は『』で引用し、自分の解釈・推測には【推測】と付ける
+- 新しいwikiを作ったら update_memory_index で索引にも1行追加する"""
+
+# フェンス索引(build_tools_spec)の節構成と対応する、ネイティブ定義の集合。
+# 節のON/OFF条件は build_tools_spec と同一に保つこと（片方だけ直すとズレる）。
+_NATIVE_MEMORY_TOOLS = [
+    "write_wiki", "save_reading_note", "save_sacred", "update_self_notes",
+    "update_user_notes", "update_memory_index", "save_lesson", "update_tasks",
+    "revise_identity", "revise_speech_style", "set_soul_name",
+    "set_reminder", "list_reminders", "read_memory", "search_memory",
+    "archive_memory", "unarchive_memory",
+    "create_skill", "update_skill", "use_skill",
+    "describe_tools",
+]
+_NATIVE_WORKSPACE_TOOLS = ["list_workspace", "read_doc", "write_doc",
+                             "append_doc", "search_workspace", "read_pdf"]
+_NATIVE_ROLE_TOOLS = ["switch_role", "create_role"]
+
+
+def build_native_tools(cfg, soul_id=None):
+    """APIの`tools`パラメータへ渡すOpenAI形式の定義リスト。
+    どのツールを出すかの条件はbuild_tools_specと同一（実行体も同じexecute）。"""
+    cfg = cfg or {}
+    names = list(_NATIVE_MEMORY_TOOLS)
+    if (cfg.get("workspace_dir", "") or "").strip():
+        names += _NATIVE_WORKSPACE_TOOLS
+    if cfg.get("auto_role_switch", False):
+        names += _NATIVE_ROLE_TOOLS
+    if (cfg.get("llm") or {}).get("web_search") and _current_llm_type(cfg) not in (
+            "gemini", "openai_codex_oauth"):
+        names.append("web_search")
+    return [tools_schema.openai_tool_def(n) for n in names]
+
+
 # describe_tools向けの詳細仕様（全ツール共通の登録簿。cfgに関係なく参照可能——
 # 「workspace_dir未設定でもread_docの詳しい使い方は聞ける」方が自然なため、
 # describe_tools自体はcfgでゲートしない。実際に使えるかどうかはexecute側の

@@ -1806,3 +1806,56 @@ def test_tools_spec_warns_against_narrated_tool_use():
     spec = memory_tools.build_tools_spec({})
     assert "地の文" in spec
     assert "動かない" in spec or "実行されない" in spec
+
+
+# --- build_native_tools（ネイティブfunction calling） 2026-08-04 ---
+
+def _native_names(cfg):
+    import memory_tools
+    return {t["function"]["name"] for t in memory_tools.build_native_tools(cfg)}
+
+
+def test_native_tools_include_memory_tools_always():
+    names = _native_names({})
+    assert "write_wiki" in names
+    assert "search_memory" in names
+    assert "create_skill" in names
+
+
+def test_native_tools_workspace_gated_by_workspace_dir():
+    assert "read_doc" not in _native_names({})
+    assert "read_doc" in _native_names({"workspace_dir": "C:/docs"})
+
+
+def test_native_tools_role_gated_by_auto_role_switch():
+    assert "switch_role" not in _native_names({})
+    assert "switch_role" in _native_names({"auto_role_switch": True})
+
+
+def test_native_tools_web_search_same_gating_as_fence():
+    """web_searchの条件はbuild_tools_specと同一: llm.web_search ONかつ
+    プロバイダtypeがgemini/openai_codex_oauth以外。"""
+    on = {"llm": {"web_search": True, "provider": "d",
+                   "providers": {"d": {"type": "deepseek"}}}}
+    off_gemini = {"llm": {"web_search": True, "provider": "g",
+                           "providers": {"g": {"type": "gemini"}}}}
+    assert "web_search" in _native_names(on)
+    assert "web_search" not in _native_names(off_gemini)
+    assert "web_search" not in _native_names({})
+
+
+def test_native_tools_are_openai_format():
+    import memory_tools
+    for t in memory_tools.build_native_tools({}):
+        assert t["type"] == "function"
+        assert t["function"]["parameters"]["type"] == "object"
+
+
+def test_native_spec_note_has_write_norms_but_no_fence():
+    """ネイティブ経路の注意文: 規範（『』・【推測】・実行した時だけ）は残し、
+    fieria-toolフェンスの書式説明は含めない（二重の作法を教えない）。"""
+    import memory_tools
+    note = memory_tools.NATIVE_SPEC_NOTE
+    assert "『』" in note
+    assert "【推測】" in note
+    assert "fieria-tool" not in note
