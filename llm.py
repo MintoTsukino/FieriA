@@ -101,6 +101,20 @@ def _post_sse_stream(url, payload, headers=None, timeout=120):
         resp.close()
 
 
+class NativeToolsUnsupported(RuntimeError):
+    """ネイティブtoolsをエンドポイントが受け付けなかった（モデル・ゲートウェイ非対応）。
+    engine側はこれを見てフェンス方式へフォールバックする。判定は
+    CodexOAuthLLM._post_responses_sseのweb_search拒否検知と同じ「エラーメッセージに
+    tools/functionを含むか」方式（HTTPステータスだけでは区別できないため）。"""
+
+
+def _raise_maybe_tools_unsupported(e):
+    msg = str(e).lower()
+    if "tool" in msg or "function" in msg:
+        raise NativeToolsUnsupported(str(e)) from e
+    raise
+
+
 class _ChatStreamFallbackMixin:
     """FieriA拡張: ストリーミング。chat_stream未実装のプロバイダ向け既定実装。
 
@@ -122,7 +136,15 @@ def _to_openai_msg(m):
     実際にPDFを画像として解釈できるかは保証しない。フォールバック先が非Geminiだと
     ネイティブPDF添付を含むターンは失敗しうるが、動的なPDF→画像変換はスコープ外として
     許容する（GeminiLLM.chatはmimeをinline_data.mime_typeへそのまま渡すので問題ない）。
+
+    FieriA拡張: ネイティブfunction calling。tool_callsキーを持つassistantメッセージと
+    role=="tool"のメッセージは、上記のimages変換対象（user/assistantのテキスト+images
+    前提）に当てはまらないため、必要キーをそのまま素通しする。
     """
+    if m.get("tool_calls") is not None:
+        return {"role": m["role"], "content": m.get("content"), "tool_calls": m["tool_calls"]}
+    if m.get("role") == "tool":
+        return {"role": "tool", "tool_call_id": m.get("tool_call_id"), "content": m.get("content")}
     images = m.get("images")
     if not images:
         return {"role": m["role"], "content": m["content"]}
@@ -134,6 +156,10 @@ def _to_openai_msg(m):
 
 
 class OpenAICompatLLM(_ChatStreamFallbackMixin):
+    # ネイティブfunction calling対応（engineの経路分岐が見るクラス能力フラグ。
+    # サブクラスXaiOAuthLLM/OpenRouterLLMにも自動継承される）
+    supports_native_tools = True
+
     def __init__(self, entry, api_key, temperature, max_tokens, reasoning_effort=""):
         self.base_url = (entry.get("base_url") or "").rstrip("/")
         self.api_key = api_key
@@ -256,6 +282,50 @@ class OpenAICompatLLM(_ChatStreamFallbackMixin):
             text = delta.get("content")
             if text:
                 yield text
+
+    # FieriA拡張: ネイティブfunction calling
+    def chat_tools(self, messages, tools, max_tokens=None):
+        """ネイティブtoolsつきの1回呼び出し(非ストリーム)。
+        戻り値: {"text": str, "tool_calls": [{"id","name","arguments"(dict)}]}。
+        messagesにはassistant(tool_calls)とrole:"tool"のエントリが混ざってよい
+        （_to_openai_msgがそのまま通す）。argumentsのJSONが壊れていたら
+        {"__raw": 元文字列}にして返す——ここでは落とさず、engine側が
+        「壊れた引数」として差し戻せるようにする。"""
+        payload = {
+            "model": self.model,
+            "messages": [_to_openai_msg(m) for m in messages],
+            "temperature": self.temperature,
+            "stream": False,
+            "tools": tools,
+        }
+        effective_max_tokens = max_tokens if max_tokens is not None else self.max_tokens
+        if effective_max_tokens and int(effective_max_tokens) > 0:
+            payload["max_tokens"] = int(effective_max_tokens)
+        if self.reasoning_effort:
+            payload["reasoning_effort"] = self.reasoning_effort
+        payload.update(self._extra_payload_fields())
+        try:
+            body = _post_json(f"{self.base_url}/chat/completions", payload,
+                               headers=self._headers())
+        except Exception as e:
+            _raise_maybe_tools_unsupported(e)
+        choices = body.get("choices")
+        if not choices:
+            raise RuntimeError(f"LLM応答が空: {json.dumps(body, ensure_ascii=False)[:200]}")
+        message = choices[0].get("message") or {}
+        calls = []
+        for tc in (message.get("tool_calls") or []):
+            fn = tc.get("function") or {}
+            raw_args = fn.get("arguments") or "{}"
+            try:
+                args = json.loads(raw_args)
+                if not isinstance(args, dict):
+                    args = {"__raw": raw_args}
+            except (json.JSONDecodeError, ValueError):
+                args = {"__raw": raw_args}
+            calls.append({"id": tc.get("id") or "", "name": fn.get("name") or "",
+                           "arguments": args})
+        return {"text": (message.get("content") or "").strip(), "tool_calls": calls}
 
 
 # Gemini 2.5系のthinkingBudget（内部思考に使うトークン数の上限）目安値。
