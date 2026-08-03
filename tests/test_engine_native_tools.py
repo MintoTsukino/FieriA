@@ -131,6 +131,50 @@ def test_native_broken_arguments_reported_not_executed():
     assert soul_mod.read_file(sid, "wiki/壊れ.md") == ""  # 実行されていない
 
 
+def test_native_fallback_mid_turn_reports_prior_tool_execution():
+    """ラウンド1でツール実行成功→ラウンド2でNativeToolsUnsupported→フェンスへ
+    切り替わるケース。フェンス側のモデルはネイティブの往復（exchange、ローカル
+    変数）を一切見ないので、既に実行済みの分を申し送らないと同じ書き込みを
+    繰り返しうる（実機レビュー指摘 2026-08-04）。"""
+    import llm as llm_mod
+
+    class PartialFailLLM(FakeNativeLLM):
+        def __init__(self, script):
+            super().__init__(script)
+            self.call_count = 0
+            self.fence_system_text = None
+
+        def chat_tools(self, messages, tools, max_tokens=None):
+            self.call_count += 1
+            if self.call_count == 1:
+                return self.script.pop(0)
+            raise llm_mod.NativeToolsUnsupported("boom")
+
+        def chat(self, messages, max_tokens=None):
+            self.fence_system_text = messages[0]["content"]
+            return "フェンス経由で完了"
+
+    sid = soul_mod.create_soul("フォールバック途中失敗テスト", "コア")
+    llm = PartialFailLLM([
+        _calling("save_lesson", {"text": "二重書き込み防止テスト"}),
+    ])
+    eng = engine_mod.Engine(_cfg(), llm, sid)
+
+    result = eng.process_turn("これ覚えて")
+
+    assert result["reply"] == "フェンス経由で完了"
+    # (a) lessons.mdへの書き込みは1回だけ
+    body = soul_mod.read_file(sid, "lessons.md")
+    assert body.count("二重書き込み防止テスト") == 1
+    # (b) フェンス側system_textに実行済み注記がある
+    assert "既に実行済み" in llm.fence_system_text
+    assert "save_lesson" in llm.fence_system_text
+    # (c) operationsにラウンド1のopが1回だけ入っている
+    save_ops = [op for op in result["operations"] if op["op"] == "save_lesson"]
+    assert len(save_ops) == 1
+    assert save_ops[0]["ok"] is True
+
+
 def test_native_round_limit_stops_loop():
     import memory_tools
     sid = soul_mod.create_soul("ラウンド上限テスト", "コア")

@@ -353,6 +353,22 @@ class Engine:
             system_text += "\n\n" + recall_block
         return system_text
 
+    def _already_executed_note(self, ops):
+        """ネイティブ→フェンスへのフォールバック時、直前のネイティブラウンドで
+        既に成功実行済みのツールをフェンス側へ申し送るシステム注記（実機レビュー
+        指摘 2026-08-04）。フェンス側のモデルはネイティブの往復（exchange、ローカル
+        変数）を一切見ないため、知らせないと同じ書き込みを繰り返しうる
+        （例: save_lesson済みなのに気づかず再度save_lesson）。成功したもの
+        （op["ok"]がTrue）だけを対象にする——失敗したものは実行されていないため
+        「繰り返すな」の対象外（むしろ書き直してほしいケース）。opsが空（何も
+        実行されないままtoolsを拒否された）なら空文字列を返す。"""
+        done = [op for op in ops if op.get("ok")]
+        if not done:
+            return ""
+        lines = "\n".join(f"- {op.get('op')}: {op.get('detail')}" for op in done)
+        return ("\n\n（システム: 直前に以下のツールは既に実行済み。"
+                f"同じ書き込みを繰り返さないこと:\n{lines}）")
+
     def _process_turn_native(self, system_text, operations, on_delta, on_status):
         """ネイティブfunction callingのツールループ。system_textはラウンド間で
         再合成しない（ブリーフの仕様: フェンス経路と違いtools_specを持たないため
@@ -572,6 +588,12 @@ class Engine:
         any_tool_call = False
         try:
             if use_native:
+                # フォールバック時、ネイティブ側で既に実行「済み」のツールを
+                # フェンス側へ申し送るため、ネイティブ実行前の時点のoperations件数を
+                # 覚えておく（差分＝ネイティブが積んだ分。実機レビュー指摘2026-08-04:
+                # ラウンド1で成功後ラウンド2がtools拒否されると、フェンスは何も知らずに
+                # 同じ書き込みを繰り返しうる）。
+                pre_native_ops_len = len(operations)
                 try:
                     reply, any_tool_call = self._process_turn_native(
                         system_text, operations, on_delta, on_status)
@@ -581,10 +603,14 @@ class Engine:
                     # self.messagesはuserメッセージ追加時点のまま——巻き戻し不要で
                     # そのままフェンス経路へやり直せる。以後このEngineは常時フェンス。
                     # ここで使うsystem_textはネイティブ用（tools_spec無し）だったため、
-                    # フェンス用（tools_spec込み）に組み直す必要がある。
+                    # フェンス用（tools_spec込み）に組み直す必要がある。operations自体は
+                    # ネイティブ実行分をそのまま残す（実際に発生した副作用は表示に残す
+                    # のが正——ブリーフの既定挙動）。
                     self._native_broken = True
+                    already_done = operations[pre_native_ops_len:]
                     system_text = self._build_fence_system_text(recall_block)
                     system_text += self._prompt_nudges()
+                    system_text += self._already_executed_note(already_done)
                     reply, any_tool_call = self._process_turn_fence(
                         system_text, recall_block, operations, on_delta, on_status)
             else:
