@@ -191,3 +191,51 @@ def test_chat_tools_stream_sends_tools_and_stream_true(monkeypatch):
 
     assert fake.payload["tools"] == TOOLS
     assert fake.payload["stream"] is True
+
+
+def test_chat_tools_stream_should_stop_breaks_before_remaining_chunks(monkeypatch):
+    """should_stopがTrueになったら以降のチャンクを読まずに打ち切る（既存chat_streamの
+    破棄方式と同じ）。fake側でジェネレータの消費数を数え、[DONE]まで消費しきらない
+    ことを確認する。"""
+    lines = [
+        _sse({"choices": [{"delta": {"content": "1"}}]}),
+        _sse({"choices": [{"delta": {"content": "2"}}]}),
+        _sse({"choices": [{"delta": {"content": "3"}}]}),
+        "data: [DONE]",
+    ]
+    consumed = {"n": 0}
+
+    def gen():
+        for line in lines:
+            consumed["n"] += 1
+            yield line
+
+    def fake(url, payload, headers=None, timeout=120):
+        return gen()
+
+    monkeypatch.setattr(llm, "_post_sse_stream", fake)
+
+    stop_calls = {"n": 0}
+
+    def should_stop():
+        stop_calls["n"] += 1
+        return stop_calls["n"] >= 2  # 2チャンク目の処理後に停止要求ありとする
+
+    result = _mk().chat_tools_stream([{"role": "user", "content": "hi"}], TOOLS,
+                                       should_stop=should_stop)
+
+    assert consumed["n"] == 2  # 3チャンク目・[DONE]は消費されていない
+    assert result["text"] == "12"
+
+
+def test_chat_tools_stream_no_should_stop_reads_all_chunks(monkeypatch):
+    """should_stop未指定（None）時は従来どおり全チャンクを読み切る（後方互換）。"""
+    fake = _fake_stream(monkeypatch, [
+        _sse({"choices": [{"delta": {"content": "1"}}]}),
+        _sse({"choices": [{"delta": {"content": "2"}}]}),
+        "data: [DONE]",
+    ])
+
+    result = _mk().chat_tools_stream([{"role": "user", "content": "hi"}], TOOLS)
+
+    assert result["text"] == "12"

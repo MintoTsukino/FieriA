@@ -383,7 +383,11 @@ class Engine:
         FieriA拡張: ストリーミング。llmがchat_tools_streamを実装していて
         （hasattrで判定——テストのFakeNativeLLM等は非対応のまま）on_deltaが
         指定されているときだけstream版を使う。無ければ従来どおりchat_toolsの
-        一括呼び出し（既存のFakeNativeLLM系テストが変更なしで通り続ける）。"""
+        一括呼び出し（既存のFakeNativeLLM系テストが変更なしで通り続ける）。
+        stream版にはshould_stop=lambda: self._stop_requestedを渡し、SSEの
+        チャンクループ内で毎チャンク停止要求を見て打ち切らせる（既存chat_stream
+        の破棄方式と同じ——打ち切り後もこの直後のself._stop_requestedチェックで
+        _TurnStoppedへ合流する）。"""
         native_tools = memory_tools.build_native_tools(self.cfg, self.soul_id)
         use_stream = on_delta is not None and hasattr(self.llm, "chat_tools_stream")
         exchange = []
@@ -393,7 +397,8 @@ class Engine:
             messages = [{"role": "system", "content": system_text}] + self.messages + exchange
             if use_stream:
                 result = self.llm.chat_tools_stream(
-                    messages, native_tools, max_tokens=None, on_delta=on_delta)
+                    messages, native_tools, max_tokens=None, on_delta=on_delta,
+                    should_stop=lambda: self._stop_requested)
             else:
                 result = self.llm.chat_tools(messages, native_tools, max_tokens=None)
             if self._stop_requested:

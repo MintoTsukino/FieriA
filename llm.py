@@ -328,7 +328,7 @@ class OpenAICompatLLM(_ChatStreamFallbackMixin):
         return {"text": (message.get("content") or "").strip(), "tool_calls": calls}
 
     # FieriA拡張: ネイティブfunction calling・ストリーミング
-    def chat_tools_stream(self, messages, tools, max_tokens=None, on_delta=None):
+    def chat_tools_stream(self, messages, tools, max_tokens=None, on_delta=None, should_stop=None):
         """chat_tools()のstream版。戻り値の形はchat_toolsと同じ。本文差分は
         on_deltaへ逐次通知する（on_delta自体の例外は表示用コールバックの失敗として
         握りつぶす——既存_call_llmと同じ「表示の失敗で会話を止めない」方針）。
@@ -337,7 +337,13 @@ class OpenAICompatLLM(_ChatStreamFallbackMixin):
         [{"index", "id", "function": {"name", "arguments"}}]の形で届く。id/nameは
         最初のチャンクにだけ入り、function.argumentsは複数チャンクに割れて届く。
         indexをキーに紐づけ、argumentsは文字列連結してから[DONE]後にまとめて
-        JSONパースする（壊れは{"__raw": ...}——chat_toolsと同じ扱い）。"""
+        JSONパースする（壊れは{"__raw": ...}——chat_toolsと同じ扱い）。
+
+        should_stop: FieriA拡張・停止要求チェック用の引数無しコールバック(() -> bool)。
+        指定時はチャンクを1個処理するたびに呼び、Trueが返ったら以降のチャンクを
+        読まずにループをbreakする（既存engine._call_llmのchat_stream打ち切りと同じ
+        「破棄方式」——呼び出し元がその時点までの部分結果を見て捨てるかどうかを
+        決める）。未指定（None）なら従来どおり全チャンクを読み切る（後方互換）。"""
         payload = {
             "model": self.model,
             "messages": [_to_openai_msg(m) for m in messages],
@@ -393,6 +399,8 @@ class OpenAICompatLLM(_ChatStreamFallbackMixin):
                         entry["name"] = fn["name"]
                     if fn.get("arguments"):
                         entry["arguments_parts"].append(fn["arguments"])
+                if should_stop and should_stop():
+                    break
         except Exception as e:
             _raise_maybe_tools_unsupported(e)
         calls = []

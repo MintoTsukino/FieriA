@@ -206,7 +206,8 @@ def test_native_system_prompt_has_note_but_no_fence_spec():
 
 def test_native_streaming_deltas_reach_on_delta():
     class StreamNativeLLM(FakeNativeLLM):
-        def chat_tools_stream(self, messages, tools, max_tokens=None, on_delta=None):
+        def chat_tools_stream(self, messages, tools, max_tokens=None, on_delta=None,
+                               should_stop=None):
             result = self.chat_tools(messages, tools, max_tokens)
             if on_delta and result["text"]:
                 on_delta(result["text"])
@@ -221,3 +222,38 @@ def test_native_streaming_deltas_reach_on_delta():
 
     assert result["reply"] == "流れる返事じょ"
     assert deltas == ["流れる返事じょ"]
+
+
+def test_native_streaming_stop_mid_stream_joins_existing_stop_flow():
+    """ストリーム途中（1チャンク目の受信直後）にrequest_stop()相当が起きたとき、
+    既存の停止フロー（stopped結果・履歴巻き戻し・AIログ未記録）に合流すること。
+    should_stopコールバック経由で打ち切られたLLM側も、そこまでの部分結果を返して
+    よい——engine側が_stop_requestedを見て最終的に破棄する（tests/test_engine_
+    streaming.pyのchat_stream版と同じ設計）。"""
+    class StopMidStreamLLM(FakeNativeLLM):
+        def chat_tools_stream(self, messages, tools, max_tokens=None, on_delta=None,
+                               should_stop=None):
+            emitted = []
+            for chunk in ["前半", "この続きは使われないはず"]:
+                if should_stop and should_stop():
+                    break
+                emitted.append(chunk)
+                if on_delta:
+                    on_delta(chunk)
+            return {"text": "".join(emitted), "tool_calls": []}
+
+    sid = soul_mod.create_soul("ネイティブストリーム停止テスト", "コア")
+    eng = engine_mod.Engine(_cfg(), StopMidStreamLLM([]), sid)
+    before_len = len(eng.messages)
+    received = []
+
+    def stop_after_first_chunk(delta):
+        received.append(delta)
+        eng.request_stop()
+
+    result = eng.process_turn("やあ", on_delta=stop_after_first_chunk)
+
+    assert result["stopped"] is True
+    assert result["reply"] == ""
+    assert received == ["前半"]  # 2チャンク目は打ち切られて届いていない
+    assert len(eng.messages) == before_len
