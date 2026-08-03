@@ -499,9 +499,25 @@
   }
   #mem-tree .file-item:hover, #mem-tree .file-item.active,
   #log-tree .file-item:hover, #log-tree .file-item.active { background: var(--bg2); color: var(--fg); }
-  #mem-body, #log-body { flex: 1; overflow-y: auto; padding: 24px; white-space: pre-wrap; line-height: 1.8; user-select: text; }
-  #mem-body.empty, #log-body.empty { color: var(--fg-dim); }
+  #log-body { flex: 1; overflow-y: auto; padding: 24px; white-space: pre-wrap; line-height: 1.8; user-select: text; }
+  #log-body.empty { color: var(--fg-dim); }
   #log-body.log-view { white-space: normal; display: flex; flex-direction: column; gap: 10px; }
+  /* 記憶ビューの本体: 読むだけの表示からtextareaへ（直接編集・保存できるように）。
+     view/log-bodyの見た目（余白・行間）を踏襲しつつ、textareaの既定chromeを消す。 */
+  #mem-body-col { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  #mem-toolbar {
+    display: flex; align-items: center; gap: 10px; padding: 10px 24px;
+    border-bottom: 1px solid var(--line); flex: 0 0 auto;
+  }
+  #mem-toolbar-filename { font-size: 13px; color: var(--fg-dim); word-break: break-all; flex: 1; }
+  #mem-body {
+    flex: 1; width: 100%; box-sizing: border-box; overflow-y: auto;
+    padding: 24px; line-height: 1.8; min-height: 0;
+    border: none; outline: none; resize: none;
+    background: transparent; color: var(--fg); font-family: inherit; font-size: 14px;
+  }
+  #mem-body.empty { color: var(--fg-dim); }
+  #mem-body[readonly] { cursor: default; }
 
   /* --- 設定ビュー --- */
   #settings-view { padding: 0; flex-direction: column; gap: 0; }
@@ -914,7 +930,15 @@
     <!-- 記憶ビュー -->
     <div class="view" id="memory-view">
       <div id="mem-tree"></div>
-      <div id="mem-body" class="empty">左のファイル一覧から選ぶとここに表示される</div>
+      <div id="mem-body-col">
+        <div id="mem-toolbar" style="display:none;">
+          <span id="mem-toolbar-filename"></span>
+          <button id="mem-save-btn" disabled>保存</button>
+          <span id="mem-save-status" class="hint"></span>
+        </div>
+        <textarea id="mem-body" class="empty" readonly
+                  placeholder="左のファイル一覧から選ぶとここに表示される"></textarea>
+      </div>
     </div>
 
     <!-- ログビュー -->
@@ -1627,6 +1651,12 @@ function renderMarkdownToHtml(raw) {
     // （区切りボタンと同じfire-and-forget。失敗しても会話を壊さない）。
     state.tts = data.tts || {};
     window.pywebview.api.tts_stop().catch(function () {});
+    // 記憶ビューが別SOULの内容・選択を持ち越さないようにする（boot/switch_soul/
+    // create_soulの全経路がここを通る）。持ち越すと「保存」が新しいSOULの同名
+    // ファイルへ古いSOULの内容を書いてしまう事故になりうる。呼び出し側
+    // （SOULメニュー等のswitch_soulハンドラ）は切替前にconfirmDiscardMemEditで
+    // 未保存編集の破棄確認を済ませているため、ここでは無条件にリセットしてよい。
+    loadMemoryTree();
 
     var soulObj = state.souls.find(function (s) { return s.id === state.active_soul; });
     $("soul-name-label").textContent = soulObj ? soulObj.name : "SOUL未選択";
@@ -2959,6 +2989,7 @@ function renderMarkdownToHtml(raw) {
       if (!isActive) {
         item.addEventListener("click", function () {
           if (sending) return;
+          if (!confirmDiscardMemEdit()) return;  // 記憶ビューの未保存編集が別SOULへ誤って書かれるのを防ぐ
           identityRequestSeq++;  // 編集応答待ちがあれば無効化（レースガード。設定画面のswitchボタンと同じ考え方）
           menu.classList.remove("open");
           window.pywebview.api.switch_soul(s.id).then(function (data) {
@@ -2996,11 +3027,63 @@ function renderMarkdownToHtml(raw) {
     $("side-toggle-btn").textContent = collapsed ? "◂" : "▸";
   });
 
-  // --- 記憶ビュー ---
+  // --- 記憶ビュー（直接編集できる。読むだけだったmem-bodyをtextarea化） ---
+  // memDirty: 保存していない変更があるか。memCurrentFile: 選択中のファイルのrel_path
+  // （nullなら未選択）。ファイル切替・SOUL切替時にmemDirtyを見て、変更を捨てるか
+  // 確認する（識別子はrenderSoulList等の既存の状態変数と同じ命名規則）。
+  var memDirty = false;
+  var memCurrentFile = null;
+
+  function setMemDirty(dirty) {
+    memDirty = dirty;
+    $("mem-save-btn").disabled = !dirty;
+    $("mem-save-status").textContent = dirty ? "未保存の変更あり" : "";
+  }
+
+  function confirmDiscardMemEdit() {
+    if (!memDirty) return true;
+    return window.confirm(
+      memCurrentFile + " に保存していない変更があります。破棄して移動しますか？");
+  }
+
+  $("mem-body").addEventListener("input", function () {
+    if (memCurrentFile) setMemDirty(true);
+  });
+
+  $("mem-save-btn").addEventListener("click", function () {
+    if (!memCurrentFile) return;
+    var content = $("mem-body").value;
+    $("mem-save-btn").disabled = true;
+    $("mem-save-status").textContent = "保存中…";
+    window.pywebview.api.write_soul_file(memCurrentFile, content).then(function (result) {
+      if (result && result.ok) {
+        setMemDirty(false);
+        showToast(memCurrentFile + " を保存した");
+      } else {
+        $("mem-save-btn").disabled = false;
+        $("mem-save-status").textContent = "";
+        showToast((result && result.error) || "保存に失敗した", "error");
+      }
+    }).catch(function (err) {
+      $("mem-save-btn").disabled = false;
+      $("mem-save-status").textContent = "";
+      showToast("保存に失敗した: " + err, "error");
+    });
+  });
+
   function loadMemoryTree() {
     window.pywebview.api.list_soul_files().then(function (files) {
       var tree = $("mem-tree");
       tree.innerHTML = "";
+      // SOUL切替等でファイル一覧ごと作り直す時は、選択中の編集状態も一緒に畳む
+      // （切替先には別ファイルの内容がそのまま残らないように）。
+      memCurrentFile = null;
+      setMemDirty(false);
+      $("mem-toolbar").style.display = "none";
+      $("mem-body").readOnly = true;
+      $("mem-body").classList.add("empty");
+      $("mem-body").value = "";
+      $("mem-body").placeholder = "左のファイル一覧から選ぶとここに表示される";
       if (!files.length) {
         var empty = document.createElement("div");
         empty.className = "hint";
@@ -3013,12 +3096,21 @@ function renderMarkdownToHtml(raw) {
         item.className = "file-item";
         item.textContent = f;
         item.addEventListener("click", function () {
+          if (item.classList.contains("active")) return;
+          if (!confirmDiscardMemEdit()) return;
           document.querySelectorAll("#mem-tree .file-item").forEach(function (x) { x.classList.remove("active"); });
           item.classList.add("active");
           window.pywebview.api.read_soul_file(f).then(function (content) {
+            memCurrentFile = f;
             var body = $("mem-body");
             body.classList.remove("empty");
-            body.textContent = content || "（空のファイル）";
+            body.readOnly = false;
+            body.value = content || "";
+            // ファイル自体は空の場合のプレースホルダ（「未選択」文言と混同しないように）
+            body.placeholder = "（空のファイル。ここに書いて保存できます）";
+            $("mem-toolbar").style.display = "";
+            $("mem-toolbar-filename").textContent = f;
+            setMemDirty(false);
           });
         });
         tree.appendChild(item);
@@ -3314,6 +3406,7 @@ function renderMarkdownToHtml(raw) {
         swBtn.textContent = "切替";
         swBtn.disabled = sending;
         swBtn.addEventListener("click", function () {
+          if (!confirmDiscardMemEdit()) return;  // 記憶ビューの未保存編集が別SOULへ誤って書かれるのを防ぐ
           identityRequestSeq++;  // 編集応答待ちがあれば無効化（レースガード）
           window.pywebview.api.switch_soul(s.id).then(function (data) {
             applyBoot(data);

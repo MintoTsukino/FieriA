@@ -2601,3 +2601,80 @@ def test_save_settings_rejects_non_string_entry_values():
     b.save_settings({"fact_layer_overrides": {sid: 12345}})
 
     assert b._cfg["fact_layer_overrides"] == {}
+
+
+# --- 記憶ファイルの直接編集(write_soul_file) 2026-08-03 ---
+# 記憶ビュー（読むだけだった）から、選んだ.mdファイルをユーザー自身が
+# 書き換えられるようにする。READMEの「記憶は全部見える」を「全部書ける」へ
+# 一段広げる機能。パストラバーサル防御はsoul._safe_pathに一本化されている
+# ため、ここでは「防御が効くこと」と「正常系で実際に書けること」を確認する。
+
+def test_write_soul_file_writes_content():
+    import gui
+    import soul
+    b = gui.Bridge()
+    sid = soul.create_soul("記憶編集テスト")
+    b._cfg["active_soul"] = sid
+
+    result = b.write_soul_file("user.md", "みんとちゃんはASD/ADHD。")
+
+    assert result["ok"] is True
+    assert soul.read_file(sid, "user.md") == "みんとちゃんはASD/ADHD。"
+
+
+def test_write_soul_file_overwrites_existing_content():
+    import gui
+    import soul
+    b = gui.Bridge()
+    sid = soul.create_soul("上書き編集テスト")
+    b._cfg["active_soul"] = sid
+    soul.write_file(sid, "lessons.md", "# lessons\n古い内容")
+
+    b.write_soul_file("lessons.md", "# lessons\n新しい内容")
+
+    assert soul.read_file(sid, "lessons.md") == "# lessons\n新しい内容"
+
+
+def test_write_soul_file_without_active_soul_errors():
+    import gui
+    b = gui.Bridge()
+    b._cfg["active_soul"] = None
+
+    result = b.write_soul_file("user.md", "誰のものでもない")
+
+    assert result["ok"] is False
+    assert result["error"]
+
+
+def test_write_soul_file_rejects_path_traversal():
+    import gui
+    import soul
+    b = gui.Bridge()
+    sid = soul.create_soul("トラバーサル拒否テスト")
+    b._cfg["active_soul"] = sid
+
+    result = b.write_soul_file("../../evil.md", "外へ出ようとする内容")
+
+    assert result["ok"] is False
+    assert result["error"]
+    import os
+    outside = os.path.join(soul.SOULS_DIR, "..", "..", "evil.md")
+    assert not os.path.isfile(os.path.abspath(outside))
+
+
+def test_write_soul_file_can_edit_identity_and_prompt_still_omits_when_emptied():
+    """identity.mdは専用の更新フローがあるが、汎用エディタで直接空にしても
+    プレースホルダ判定（read_identity_parts）が壊れないこと。"""
+    import gui
+    import soul
+    import prompt
+    b = gui.Bridge()
+    sid = soul.create_soul("core直接編集テスト", identity_text="わたしはテト")
+    b._cfg["active_soul"] = sid
+
+    b.write_soul_file("identity.md", "")
+
+    parts = soul.read_identity_parts(sid)
+    assert parts["core"] == ""
+    text = prompt.build_system_text({"fact_layer": {"enabled": False}}, sid)
+    assert "わたしはテト" not in text

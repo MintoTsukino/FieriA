@@ -1035,6 +1035,23 @@ class Bridge:
             return ""
         return soul_mod.read_file(self._cfg["active_soul"], rel_path)
 
+    def write_soul_file(self, rel_path, content):
+        """記憶ビューから、選んだ.mdファイルの中身をユーザー自身が書き換える。
+        list_soul_filesが返すrel_pathは元々soul_dir配下を歩いて得た安全な値だが、
+        改竄されたJS由来の値が来ても soul.write_file 内部の _safe_path が
+        soul_dir外への書き込みを例外で拒否する（read_soul_fileと同じ防御に一本化）。
+        identity.md/speech_style.mdも対象に含む——専用の更新フロー
+        （update_soul_identity）とは別経路だが、空文字を書いてもプレースホルダ判定
+        （read_identity_parts）は""を空扱いするため壊れない。"""
+        sid = self._cfg.get("active_soul")
+        if not sid:
+            return {"ok": False, "error": "SOULが選ばれていない"}
+        try:
+            soul_mod.write_file(sid, rel_path, content)
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
+        return {"ok": True, "error": ""}
+
     def get_latest_diary(self):
         """右パネル「日記」用。直近の日次日記を{"date","text","note"}で返す。1本も無ければ
         date=None, text=""（日記は「今日書かれてるはず」ではなく「セッション終了時に

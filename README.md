@@ -55,6 +55,7 @@
 - SOULの口調欄（identity.md内を核+「## 口調」で分割管理。既存SOULの編集UIも追加）
 - 今日の会話の復元（再起動時に画面+LLMコンテキスト両方へ。`restore_turns`既定50、連続同role正規化つき）
 - 会話ログ閲覧（左ナビ「ログ」——日付ごとの過去会話を読み取り専用で閲覧）
+- 記憶ファイルの直接編集（左ナビ「記憶」——一覧から選んだ.mdファイルをその場で書き換えて保存できる。user.md・lessons.md・wikiなど、AIが読み書きするのと同じファイルにユーザー自身も手を入れられる。未保存の変更があるまま別ファイル・別SOULへ移ろうとすると確認が入る）
 - `start-gui.bat`（ダブルクリック起動）
 - 記憶のインポート（設定画面からMD/フォルダを選ぶと、AI本人が読んでwiki・索引に整理。原文は `souls/<id>/imported/` に無改変保存。処理は1件ずつで進行モーダル・キャンセルつき）
 - プロバイダ別の推論エフォート（設定のプロバイダカードで指定なし/low/medium/high。OpenAI互換系はreasoning_effort、GeminiはthinkingBudget、CodexはResponses APIのreasoningへ反映。非対応モデルでは無視される）
