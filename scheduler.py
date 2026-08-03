@@ -381,7 +381,11 @@ class Scheduler:
         self._on_job_change = None
         self._stop_event = threading.Event()
         self._thread = None
-        # job_id -> 最後に実行した日付("YYYY-MM-DD")。ジョブごとに1日1回のゲート。
+        # (job_id, soul_id) -> 最後に実行した日付("YYYY-MM-DD")。
+        # 「SOULごとに」1日1回のゲート。job_idだけを鍵にすると、コノハの日記を
+        # 書いた後にクロエへ切り替えてもクロエの日記が翌日まで書かれず、
+        # 毎日そのジョブの時刻に同じSOULが選ばれていれば他のSOULの日記は
+        # 永久に書かれない（SOULごとに記憶が育つという前提そのものが壊れる）。
         self._last_run_dates = {}
         # 今日ぶんの job_id -> 実行結果。日付が変わったらまるごと捨てる
         # （last_run_info["jobs"]の材料。1tick1ジョブになったため、
@@ -443,10 +447,10 @@ class Scheduler:
             return None
         scheduled = cfg.get("scheduled_jobs", {})
         hours = cfg.get("scheduled_job_hours", {})
-        job = self._next_due_job(scheduled, hours, today, now.hour)
+        job = self._next_due_job(scheduled, hours, today, now.hour, soul_id)
         if job is None:
             return None
-        self._last_run_dates[job["id"]] = today
+        self._last_run_dates[(job["id"], soul_id)] = today
         with self._running_lock:
             self._running_job = True
             self._running_job_name = job["name"]
@@ -472,14 +476,14 @@ class Scheduler:
         }
         return job["id"]
 
-    def _next_due_job(self, scheduled, hours, today, hour):
-        """JOBSの並び順で、今この瞬間に走らせるべき最初のジョブを返す（無ければNone）。
-        並び順はそのまま優先順位でもある（日次→週次→月次。週次の素材は日次日記なので
-        同じ日のうちに上流を先に済ませる必要がある）。"""
+    def _next_due_job(self, scheduled, hours, today, hour, soul_id):
+        """JOBSの並び順で、今この瞬間にこのSOULへ走らせるべき最初のジョブを返す
+        （無ければNone）。並び順はそのまま優先順位でもある（日次→週次→月次。
+        週次の素材は日次日記なので同じ日のうちに上流を先に済ませる必要がある）。"""
         for job in JOBS:
             if not scheduled.get(job["id"], True):
                 continue
-            if self._last_run_dates.get(job["id"]) == today:
+            if self._last_run_dates.get((job["id"], soul_id)) == today:
                 continue
             if hour < _job_hour(job, hours):
                 continue

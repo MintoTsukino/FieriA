@@ -1289,3 +1289,70 @@ def test_tick_survives_broken_notifier():
     sch._on_job_change = boom
 
     assert sch.tick(now=_dt(hour=23)) == "daily_chronicle"
+
+
+# --- 定期処理はSOULごとに1日1回 2026-08-03 ---
+# 「今日やった」記録がアプリ全体で1本だったため、コノハの日記を書いた後に
+# クロエへ切り替えても、クロエの日記は翌日まで書かれなかった（毎日0時に
+# コノハが選ばれていれば、クロエの日記は永久に書かれない）。
+
+def test_tick_runs_job_again_for_a_different_soul_same_day():
+    import scheduler
+    sid_a = _soul_with_two_pending_jobs("切替元SOUL")
+    sid_b = _soul_with_two_pending_jobs("切替先SOUL")
+    active = {"id": sid_a}
+    sch = scheduler.Scheduler()
+    sch._get_context = lambda: (_cfg(), FakeLLM(), active["id"])
+
+    assert sch.tick(now=_dt(hour=23)) == "daily_chronicle"
+    active["id"] = sid_b
+
+    assert sch.tick(now=_dt(hour=23)) == "daily_chronicle"
+
+
+def test_tick_writes_the_switched_souls_own_diary():
+    """切替後に走ったジョブが、ちゃんと新しいSOULの記憶へ書いていること。"""
+    import scheduler, soul
+    sid_a = _soul_with_two_pending_jobs("書き分け元SOUL")
+    sid_b = _soul_with_two_pending_jobs("書き分け先SOUL")
+    day = _dates_ago(1)
+    active = {"id": sid_a}
+    sch = scheduler.Scheduler()
+    sch._get_context = lambda: (_cfg(), FakeLLM(), active["id"])
+    sch.tick(now=_dt(hour=23))
+    assert soul.read_file(sid_b, f"chronicle/{day}.md") == ""
+
+    active["id"] = sid_b
+    sch.tick(now=_dt(hour=23))
+
+    assert soul.read_file(sid_b, f"chronicle/{day}.md") != ""
+
+
+def test_tick_still_gates_same_soul_same_job_within_a_day():
+    """SOUL別にしても、同じSOULの同じジョブは1日1回のまま（退行防止）。"""
+    import scheduler
+    sid = _soul_with_two_pending_jobs("同一SOUL据置テスト")
+    sch = scheduler.Scheduler()
+    sch._get_context = lambda: (_cfg(), FakeLLM(), sid)
+    while sch.tick(now=_dt(hour=23)):
+        pass
+
+    assert sch.tick(now=_dt(hour=23)) is None
+
+
+def test_tick_switching_back_does_not_rerun_first_soul():
+    import scheduler
+    sid_a = _soul_with_two_pending_jobs("往復元SOUL")
+    sid_b = _soul_with_two_pending_jobs("往復先SOUL")
+    active = {"id": sid_a}
+    sch = scheduler.Scheduler()
+    sch._get_context = lambda: (_cfg(), FakeLLM(), active["id"])
+    while sch.tick(now=_dt(hour=23)):
+        pass
+    active["id"] = sid_b
+    while sch.tick(now=_dt(hour=23)):
+        pass
+
+    active["id"] = sid_a
+
+    assert sch.tick(now=_dt(hour=23)) is None
