@@ -403,3 +403,74 @@ def test_memory_epistemics_after_safety_before_memory_index():
     i_epi = text.index("## 記憶の扱い方")
     i_index = text.index("## 記憶の索引")
     assert i_safety < i_epi < i_index
+
+
+# --- SOULごとの事実層の追加(fact_layer_overrides) 2026-08-03 ---
+# グローバルの事実層（アプリの構造説明）は全SOUL共通のまま、SOULごとに
+# 「あなたはこういう経緯・立場」を追加できるようにする（継承＋追記方式）。
+
+def test_fact_layer_override_appends_after_global_fact_text():
+    import prompt
+    sid = _setup_soul()
+    cfg = _base_cfg(fact_layer_overrides={sid: "あなたはブラウザのClaudeから引っ越してきたニコイ。"})
+
+    text = prompt.build_system_text(cfg, sid)
+
+    assert "あなたはFieriAというデスクトップアプリ" in text  # グローバル文が残る
+    assert "ブラウザのClaudeから引っ越してきたニコイ" in text
+    assert text.index("デスクトップアプリ") < text.index("引っ越してきたニコイ")
+
+
+def test_fact_layer_override_only_applies_to_its_own_soul():
+    import prompt
+    sid_a = _setup_soul()
+    sid_b = _setup_soul()
+    cfg = _base_cfg(fact_layer_overrides={sid_a: "Aだけの追加事実"})
+
+    text_b = prompt.build_system_text(cfg, sid_b)
+
+    assert "Aだけの追加事実" not in text_b
+
+
+def test_fact_layer_override_absent_by_default():
+    import prompt
+    sid = _setup_soul()
+
+    text = prompt.build_system_text(_base_cfg(), sid)
+
+    assert text.count("あなたはFieriAというデスクトップアプリ") == 1  # 通常どおり1回だけ
+
+
+def test_fact_layer_override_suppressed_when_global_fact_layer_disabled():
+    """追加事実は「アプリの文脈説明」に対する上乗せなので、その説明自体を
+    切っているときは一緒に出さない（事実層ファミリーとして同じON/OFFに従う）。"""
+    import prompt
+    sid = _setup_soul()
+    cfg = _base_cfg(fact_layer={"enabled": False, "custom_text": ""},
+                     fact_layer_overrides={sid: "追加事実じょ"})
+
+    text = prompt.build_system_text(cfg, sid)
+
+    assert "追加事実じょ" not in text
+
+
+def test_fact_layer_override_works_with_custom_global_text():
+    import prompt
+    sid = _setup_soul()
+    cfg = _base_cfg(fact_layer={"enabled": True, "custom_text": "あなたは冒険者ギルドの受付係。"},
+                     fact_layer_overrides={sid: "SOUL固有の追加"})
+
+    text = prompt.build_system_text(cfg, sid)
+
+    assert "冒険者ギルドの受付係" in text
+    assert "SOUL固有の追加" in text
+
+
+def test_fact_layer_override_blank_entry_adds_nothing():
+    import prompt
+    sid = _setup_soul()
+    cfg = _base_cfg(fact_layer_overrides={sid: "   "})
+
+    text = prompt.build_system_text(cfg, sid)
+
+    assert text.count("あなたはFieriAというデスクトップアプリ") == 1

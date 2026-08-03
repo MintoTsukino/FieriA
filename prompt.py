@@ -40,6 +40,13 @@ def build_system_text(cfg, soul_id, tools_spec=""):
     fact = cfg.get("fact_layer", {})
     if fact.get("enabled", True):
         parts.append(fact.get("custom_text", "").strip() or DEFAULT_FACT_TEXT)
+        # SOULごとの追加事実（fact_layer_overrides・2026-08-03）。グローバルの
+        # 事実文（アプリの構造説明）はSOUL共通のまま、そのSOUL固有の経緯・立場を
+        # 上乗せする「継承＋追記」方式。事実層そのものがOFFのときは、上乗せ先の
+        # 文脈が無くなるため一緒に出さない（同じON/OFFに従う）。
+        addition = (cfg.get("fact_layer_overrides", {}) or {}).get(soul_id, "").strip()
+        if addition:
+            parts.append(addition)
 
     # 安全層。fact_layerの有効/無効やcustom_textの内容にかかわらず常に注入する
     # （設定で無効化不可。全SOUL共通の最低限の安全規則）。

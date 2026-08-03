@@ -2549,3 +2549,55 @@ def test_scheduled_jobs_safe_without_active_soul():
     jobs = {j["id"]: j for j in b.get_scheduled_jobs()}
 
     assert jobs["daily_chronicle"]["last_run"] is None
+
+
+# --- SOULごとの事実層の追加(fact_layer_overrides) 2026-08-03 ---
+
+def test_get_settings_exposes_fact_layer_overrides():
+    import gui
+    b = gui.Bridge()
+    assert b.get_settings()["fact_layer_overrides"] == {}
+
+
+def test_save_settings_persists_fact_layer_override_for_a_soul():
+    import gui
+    import soul
+    b = gui.Bridge()
+    sid = soul.create_soul("事実層追加テスト")
+
+    b.save_settings({"fact_layer_overrides": {sid: "あなたはニコイ。"}})
+
+    assert b._cfg["fact_layer_overrides"] == {sid: "あなたはニコイ。"}
+    assert b.get_settings()["fact_layer_overrides"] == {sid: "あなたはニコイ。"}
+
+
+def test_save_settings_strips_whitespace_and_drops_blank_entries():
+    import gui
+    import soul
+    b = gui.Bridge()
+    sid = soul.create_soul("事実層空欄テスト")
+
+    b.save_settings({"fact_layer_overrides": {sid: "  本文じょ  ", "unknown-soul": "   "}})
+
+    assert b._cfg["fact_layer_overrides"] == {sid: "本文じょ"}
+
+
+def test_save_settings_rejects_non_dict_fact_layer_overrides():
+    import gui
+    b = gui.Bridge()
+    b._cfg["fact_layer_overrides"] = {"既存": "残る"}
+
+    b.save_settings({"fact_layer_overrides": "not-a-dict"})
+
+    assert b._cfg["fact_layer_overrides"] == {}
+
+
+def test_save_settings_rejects_non_string_entry_values():
+    import gui
+    import soul
+    b = gui.Bridge()
+    sid = soul.create_soul("事実層型不正テスト")
+
+    b.save_settings({"fact_layer_overrides": {sid: 12345}})
+
+    assert b._cfg["fact_layer_overrides"] == {}

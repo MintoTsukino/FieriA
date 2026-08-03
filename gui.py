@@ -555,6 +555,7 @@ class Bridge:
         return {
             "llm": sanitize_llm_cfg(self._cfg["llm"]),
             "fact_layer": self._cfg["fact_layer"],
+            "fact_layer_overrides": self._cfg.get("fact_layer_overrides", {}),
             "default_fact_text": prompt_mod.DEFAULT_FACT_TEXT,
             "theme": self._cfg.get("theme"),
             "provider_labels": config_mod.PROVIDER_LABELS,
@@ -674,6 +675,22 @@ class Bridge:
                 "engine_url": str(e.get("engine_url", "") or ""),
                 "model": str(e.get("model", "") or ""),
             }
+        if "fact_layer_overrides" in payload:
+            # SOULごとの事実層の追加。soul_llmと同じ「不正・空は落とす」方針だが、
+            # こちらはプロバイダのようなホワイトリストが無い自由記述文なので、
+            # 検証は型（文字列であること）とstrip後の非空だけ。SOUL存在チェックは
+            # しない（削除済みSOULのエントリが残っても実害が無くYAGNI。
+            # 計画書2026-08-03-soul-llm-binding.mdの「soul_llmのゴミ掃除」判断と同じ）。
+            incoming = payload["fact_layer_overrides"]
+            validated = {}
+            if isinstance(incoming, dict):
+                for soul_id, text in incoming.items():
+                    if not isinstance(text, str):
+                        continue
+                    stripped = text.strip()
+                    if stripped:
+                        validated[soul_id] = stripped
+            self._cfg["fact_layer_overrides"] = validated
         if "soul_llm" in payload:
             # SOULごとのLLMプロバイダ紐付け。ホワイトリスト検証: providerが
             # 現在のllm.providersに実在するエントリのみ通す。不正・空・

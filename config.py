@@ -215,6 +215,10 @@ DEFAULT_CONFIG = {
     # （gui.py _effective_llm_cfg参照）。
     "soul_llm": {},
     "fact_layer": {"enabled": True, "custom_text": ""},
+    # SOULごとの事実層の追加。{soul_id: "追加事実の文"}。グローバルfact_layerの
+    # 上乗せ（継承＋追記）——文言まるごとの差し替えではない。soul_llmと同じ
+    # 「未指定はグローバルのみ」形式（gui.save_settings参照）。
+    "fact_layer_overrides": {},
     # 定期処理のON/OFF（scheduler.py JOBSのidをキーにする）。GUIの「定期処理」カードから
     # 切り替える（gui.py get_scheduled_jobs/set_scheduled_job参照）。
     "scheduled_jobs": {
