@@ -83,6 +83,66 @@ def test_find_unwritten_days_returns_oldest_first():
     assert days == sorted([d1, d2, d3])
 
 
+# --- find_stale_days ---
+
+def _set_mtimes(sid, day, log_newer):
+    """指定日のログ・日記のmtimeを人工的に設定する。log_newer=Trueなら
+    ログの方が新しい状態（日記を書いた後に会話があった状態）を作る。"""
+    import soul
+    log_path = os.path.join(soul.soul_dir(sid), "logs", f"{day}.jsonl")
+    diary_path = os.path.join(soul.soul_dir(sid), "chronicle", f"{day}.md")
+    base = 1_700_000_000
+    if log_newer:
+        os.utime(diary_path, (base, base))
+        os.utime(log_path, (base + 100, base + 100))
+    else:
+        os.utime(log_path, (base, base))
+        os.utime(diary_path, (base + 100, base + 100))
+
+
+def test_find_stale_days_detects_log_newer_than_chronicle():
+    import soul, scheduler
+    sid = soul.create_soul("stale検出テスト")
+    day = _dates_ago(1)
+    soul.append_file(sid, os.path.join("logs", f"{day}.jsonl"), "{}\n")
+    soul.write_file(sid, f"chronicle/{day}.md", "# 途中まで\n")
+    _set_mtimes(sid, day, log_newer=True)
+
+    assert scheduler.find_stale_days(sid) == [day]
+
+
+def test_find_stale_days_excludes_chronicle_newer_than_log():
+    import soul, scheduler
+    sid = soul.create_soul("stale除外テスト")
+    day = _dates_ago(1)
+    soul.append_file(sid, os.path.join("logs", f"{day}.jsonl"), "{}\n")
+    soul.write_file(sid, f"chronicle/{day}.md", "# 全部書けてる\n")
+    _set_mtimes(sid, day, log_newer=False)
+
+    assert scheduler.find_stale_days(sid) == []
+
+
+def test_find_stale_days_excludes_today():
+    import soul, scheduler
+    sid = soul.create_soul("stale今日除外テスト")
+    today = datetime.date.today().isoformat()
+    soul.append_log(sid, "user", "今日の発言")
+    soul.write_file(sid, f"chronicle/{today}.md", "# 今日の日記\n")
+    _set_mtimes(sid, today, log_newer=True)
+
+    assert scheduler.find_stale_days(sid) == []
+
+
+def test_find_stale_days_excludes_day_without_chronicle():
+    """日記が無い日はfind_unwritten_days（新規）の担当。二重処理しない。"""
+    import soul, scheduler
+    sid = soul.create_soul("stale未書き除外テスト")
+    day = _dates_ago(1)
+    soul.append_file(sid, os.path.join("logs", f"{day}.jsonl"), "{}\n")
+
+    assert scheduler.find_stale_days(sid) == []
+
+
 # --- catch_up ---
 
 def test_catch_up_writes_chronicle_for_each_unwritten_day():
@@ -154,6 +214,55 @@ def test_catch_up_returns_empty_list_when_nothing_unwritten():
     written = scheduler.catch_up(_cfg(), fake, sid)
 
     assert written == []
+
+
+def test_catch_up_appends_to_stale_day():
+    """日記はあるがログの方が新しい過去日は、既存本文を保持したまま続きを追記する。"""
+    import soul, scheduler
+    sid = soul.create_soul("キャッチアップ追記テスト")
+    day = _dates_ago(1)
+    soul.append_file(sid, os.path.join("logs", f"{day}.jsonl"),
+                      '{"who": "user", "text": "日記の後にした話じょ"}\n')
+    soul.write_file(sid, f"chronicle/{day}.md", "# 日記\n昼までの本文。\n")
+    _set_mtimes(sid, day, log_newer=True)
+    fake = FakeLLM(reply="夜の続きも書いたじょ。")
+
+    written = scheduler.catch_up(_cfg(), fake, sid)
+
+    assert written == [day]
+    body = soul.read_file(sid, f"chronicle/{day}.md")
+    assert "昼までの本文。" in body
+    assert "夜の続きも書いたじょ。" in body
+
+
+def test_catch_up_skips_stale_append_when_chronicle_is_newer():
+    import soul, scheduler
+    sid = soul.create_soul("追記不要テスト")
+    day = _dates_ago(1)
+    soul.append_file(sid, os.path.join("logs", f"{day}.jsonl"), "{}\n")
+    soul.write_file(sid, f"chronicle/{day}.md", "# 日記\n全部書けてる。\n")
+    _set_mtimes(sid, day, log_newer=False)
+    fake = FakeLLM()
+
+    written = scheduler.catch_up(_cfg(), fake, sid)
+
+    assert written == []
+    assert fake.last_system is None  # LLMが呼ばれていない
+    assert soul.read_file(sid, f"chronicle/{day}.md") == "# 日記\n全部書けてる。\n"
+
+
+def test_catch_up_append_failure_is_swallowed():
+    import soul, scheduler
+    sid = soul.create_soul("追記失敗継続テスト")
+    day = _dates_ago(1)
+    soul.append_file(sid, os.path.join("logs", f"{day}.jsonl"), "{}\n")
+    soul.write_file(sid, f"chronicle/{day}.md", "# 日記\n本文。\n")
+    _set_mtimes(sid, day, log_newer=True)
+
+    written = scheduler.catch_up(_cfg(), FakeLLM(RuntimeError("api down")), sid)
+
+    assert written == []
+    assert soul.read_file(sid, f"chronicle/{day}.md") == "# 日記\n本文。\n"
 
 
 # --- write_chronicle_for (wrapup.py の一般化) ---

@@ -51,6 +51,78 @@ def test_llm_failure_is_swallowed():
     assert ok is False  # 例外が外に漏れない
 
 
+# --- append_chronicle_for (日記の追記) ---
+
+def test_append_chronicle_appends_continuation_below_existing():
+    import soul, wrapup
+    sid = soul.create_soul("追記テスト")
+    day = datetime.date.today().isoformat()
+    soul.append_log(sid, "user", "夜にゲームの話をした")
+    soul.write_file(sid, f"chronicle/{day}.md", "# 日記\n昼はUIの話をした。\n")
+    fake = FakeLLM(reply="夜はゲームの話もした。")
+
+    ok = wrapup.append_chronicle_for(_cfg(), fake, sid, day)
+
+    assert ok
+    body = soul.read_file(sid, f"chronicle/{day}.md")
+    assert "昼はUIの話をした。" in body  # 既存本文が保持される
+    assert "夜はゲームの話もした。" in body
+    assert body.index("昼はUIの話をした。") < body.index("夜はゲームの話もした。")
+
+
+def test_append_chronicle_prompt_contains_existing_diary_and_log():
+    import soul, wrapup
+    sid = soul.create_soul("追記プロンプトテスト")
+    day = datetime.date.today().isoformat()
+    soul.append_log(sid, "user", "ログ側のユニーク発言まにゃ")
+    soul.write_file(sid, f"chronicle/{day}.md", "# 日記\n既存日記のユニーク文じょ。\n")
+    fake = FakeLLM(reply="続き。")
+
+    wrapup.append_chronicle_for(_cfg(), fake, sid, day)
+
+    assert "既存日記のユニーク文じょ。" in fake.last_system
+    assert "ログ側のユニーク発言まにゃ" in fake.last_system
+
+
+def test_append_chronicle_without_existing_diary_returns_false():
+    """日記が無い日は追記の対象外（新規はwrite_chronicle_forの担当）。"""
+    import soul, wrapup
+    sid = soul.create_soul("追記対象外テスト")
+    day = datetime.date.today().isoformat()
+    soul.append_log(sid, "user", "x")
+
+    ok = wrapup.append_chronicle_for(_cfg(), FakeLLM(), sid, day)
+
+    assert ok is False
+    assert soul.read_file(sid, f"chronicle/{day}.md") == ""
+
+
+def test_append_chronicle_empty_reply_keeps_diary_intact():
+    import soul, wrapup
+    sid = soul.create_soul("追記空応答テスト")
+    day = datetime.date.today().isoformat()
+    soul.append_log(sid, "user", "x")
+    soul.write_file(sid, f"chronicle/{day}.md", "# 日記\n本文。\n")
+
+    ok = wrapup.append_chronicle_for(_cfg(), FakeLLM(reply="  "), sid, day)
+
+    assert ok is False
+    assert soul.read_file(sid, f"chronicle/{day}.md") == "# 日記\n本文。\n"
+
+
+def test_append_chronicle_llm_failure_is_swallowed():
+    import soul, wrapup
+    sid = soul.create_soul("追記失敗テスト")
+    day = datetime.date.today().isoformat()
+    soul.append_log(sid, "user", "x")
+    soul.write_file(sid, f"chronicle/{day}.md", "# 日記\n本文。\n")
+
+    ok = wrapup.append_chronicle_for(_cfg(), FakeLLM(RuntimeError("api down")), sid, day)
+
+    assert ok is False
+    assert soul.read_file(sid, f"chronicle/{day}.md") == "# 日記\n本文。\n"
+
+
 # --- rewrite_memory_index (MEMORY.md索引の自動保守) ---
 
 def _index_cfg(limit=4000):

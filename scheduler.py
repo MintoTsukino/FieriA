@@ -45,13 +45,54 @@ def find_unwritten_days(soul_id):
     return unwritten
 
 
+def find_stale_days(soul_id):
+    """日記は既にあるが、その後にログが増えている（ログのmtime > 日記のmtime）
+    過去日を古い順のリストで返す。SOUL切替時のwrapupで日記が書かれた後、
+    夜まで会話が続いたまま日をまたいだケースを検出する。日記が無い日は
+    find_unwritten_days（新規）の担当なのでここでは対象外。今日も対象外
+    （今日の分はwrapup.write_daily_chronicleの担当——find_unwritten_daysと対称）。"""
+    logs_dir = os.path.join(soul_mod.soul_dir(soul_id), "logs")
+    if not os.path.isdir(logs_dir):
+        return []
+    chronicle_dir = os.path.join(soul_mod.soul_dir(soul_id), "chronicle")
+    today = datetime.date.today().isoformat()
+    log_dates = sorted(
+        fname[: -len(".jsonl")] for fname in os.listdir(logs_dir) if fname.endswith(".jsonl")
+    )
+    stale = []
+    for date_str in log_dates:
+        if date_str == today:
+            continue
+        diary_path = os.path.join(chronicle_dir, f"{date_str}.md")
+        if not os.path.isfile(diary_path):
+            continue
+        try:
+            log_mtime = os.path.getmtime(os.path.join(logs_dir, f"{date_str}.jsonl"))
+            diary_mtime = os.path.getmtime(diary_path)
+        except OSError:
+            continue
+        if log_mtime > diary_mtime:
+            stale.append(date_str)
+    return stale
+
+
 def catch_up(cfg, llm, soul_id, limit=7):
-    """未書きの日を古い順に最大limit日ぶん埋める。ベストエフォート：1日の生成が
-    失敗（例外・空応答）しても握りつぶして次の日へ進む。書けた日付のリストを返す。"""
+    """未書きの日を古い順に最大limit日ぶん新規で埋め、さらに「日記の後にも
+    会話が続いた日」（find_stale_days）へ続きを追記する。ベストエフォート：
+    1日の生成が失敗（例外・空応答）しても握りつぶして次の日へ進む。
+    書けた（新規・追記とも）日付のリストを返す。追記に成功すると日記の
+    mtimeがログより新しくなるため、同じ日が翌tickで再追記されることはない。"""
     written = []
     for date_str in find_unwritten_days(soul_id)[:limit]:
         try:
             ok = wrapup_mod.write_chronicle_for(cfg, llm, soul_id, date_str)
+        except Exception:
+            ok = False
+        if ok:
+            written.append(date_str)
+    for date_str in find_stale_days(soul_id)[:limit]:
+        try:
+            ok = wrapup_mod.append_chronicle_for(cfg, llm, soul_id, date_str)
         except Exception:
             ok = False
         if ok:
@@ -271,7 +312,7 @@ JOBS = [
     {
         "id": "daily_chronicle",
         "name": "日次日記",
-        "description": "日付が変わったら前日までの未書き日記を書く（アプリ起動中のみ）",
+        "description": "日付が変わったら前日までの未書き日記を書き、日記の後にも会話が続いた日には続きを追記する（アプリ起動中のみ）",
         "run": lambda cfg, llm, soul_id: catch_up(cfg, llm, soul_id),
     },
     {

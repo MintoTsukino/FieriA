@@ -16,6 +16,20 @@ DIARY_PROMPT = """あなたは今日の会話ログをもとに、自分の日�
 ## 今日の会話ログ
 {log}"""
 
+DIARY_APPEND_PROMPT = """あなたは自分の日記に「続き」を書き足します。
+既に書いた日記と、その日の会話ログ全体を渡します。
+- 日記に書いた後にあった会話（日記でまだ触れていない部分）だけを書く
+- 一人称で、自分の言葉で書く。見出しは付けない（既存の日記の下に続ける本文だけ）
+- 2〜8行程度。既に日記に書いてあることは繰り返さない
+- 会話に出た固有名詞（人・プロジェクト・約束）は正確に残す
+- 日記の後に新しい話が実質何も無ければ、1行だけ短く締める
+
+## 既に書いた日記
+{diary}
+
+## その日の会話ログ全体
+{log}"""
+
 WEEKLY_PROMPT = """以下は自分が書いた1週間分の日記です。この週のあらすじを書きます。
 - 一人称で、自分の言葉で書く
 - あった出来事・進んだこと・気持ちの変化・約束を落とさない
@@ -431,6 +445,36 @@ def write_chronicle_for(cfg, llm, soul_id, date_str):
         if not (diary or "").strip():
             return False
         soul_mod.write_file(soul_id, f"chronicle/{date_str}.md", diary.strip() + "\n")
+        return True
+    except Exception:
+        return False
+
+
+def append_chronicle_for(cfg, llm, soul_id, date_str):
+    """既存のchronicle/<date_str>.mdの末尾に「続き」を追記する（既存本文は保持）。
+    日記を書いた後にも会話が続いた日（SOUL切替時のwrapup後に夜も話した等）を、
+    翌日0時のスケジューラが埋めるための経路。日記が無い日は対象外（新規は
+    write_chronicle_forの担当）。失敗はwrite_chronicle_forと同じベストエフォート。"""
+    try:
+        rel_path = f"chronicle/{date_str}.md"
+        current = soul_mod.read_file(soul_id, rel_path).strip()
+        if not current:
+            return False
+        entries = soul_mod.read_log_for(soul_id, date_str)
+        if not entries:
+            return False
+        log_text = "\n".join(f"{e['who']}: {e['text']}" for e in entries)
+        system_text = DIARY_APPEND_PROMPT.format(diary=current, log=log_text)
+        addition = llm.chat(
+            [
+                {"role": "system", "content": system_text},
+                {"role": "user", "content": "日記の続きを書いてください。"},
+            ],
+            max_tokens=cfg.get("wrapup_max_tokens", 2000),
+        )
+        if not (addition or "").strip():
+            return False
+        soul_mod.write_file(soul_id, rel_path, current + "\n\n" + addition.strip() + "\n")
         return True
     except Exception:
         return False
