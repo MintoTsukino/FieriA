@@ -129,3 +129,79 @@ def test_parse_done_category_after_date_not_lost():
     """完了断片の後ろに来たカテゴリも捨てない（順不同・データロス禁止）"""
     got = ts.parse_done("- ✓ ゲラ戻し ｜完了 2026-08-04 ｜執筆\n")
     assert got == [{"text": "ゲラ戻し", "category": "執筆", "date": "2026-08-04"}]
+
+
+# --- 操作関数（すべて純関数・照合失敗はNone） ---
+
+def test_add_task_to_now():
+    md = ts.add_task(CANON, "now", "新タスク", due="2026-08-20", category="執筆")
+    d = ts.parse_tasks(md)
+    assert d["now"][-1] == {"text": "新タスク", "due": "2026-08-20",
+                            "category": "執筆"}
+
+
+def test_add_task_normalizes_freeform():
+    """自由記述状態への追加でも、書き戻しは正規形になる"""
+    md = ts.add_task("- 買い物\n", "now", "新タスク")
+    assert md.startswith("# tasks")
+    d = ts.parse_tasks(md)
+    assert [t["text"] for t in d["future"]] == ["買い物"]
+    assert [t["text"] for t in d["now"]] == ["新タスク"]
+
+
+def test_move_task_now_to_future():
+    md = ts.move_task(CANON, "now", 0, "ゲラ戻し")
+    d = ts.parse_tasks(md)
+    assert d["now"] == []
+    assert d["future"][-1]["text"] == "ゲラ戻し"
+
+
+def test_move_task_mismatch_returns_none():
+    """indexズレ（AIが裏で書き換えた等）は照合失敗としてNone"""
+    assert ts.move_task(CANON, "now", 0, "別のタスク") is None
+    assert ts.move_task(CANON, "now", 99, "ゲラ戻し") is None
+
+
+def test_delete_task():
+    md = ts.delete_task(CANON, "future", 1, "定期検診（内科）")
+    d = ts.parse_tasks(md)
+    assert [t["text"] for t in d["future"]] == ["体験版公開"]
+
+
+def test_complete_task_moves_to_done():
+    """完了は削除ではなく移動: tasks.mdから消え、tasks_done.mdへ日付つきで残る"""
+    md, done = ts.complete_task(CANON, "# tasks done\n", "now", 0, "ゲラ戻し",
+                                "2026-08-04")
+    assert ts.parse_tasks(md)["now"] == []
+    got = ts.parse_done(done)
+    assert got == [{"text": "ゲラ戻し", "category": "執筆", "date": "2026-08-04"}]
+
+
+def test_restore_done_back_to_now():
+    _, done = ts.complete_task(CANON, "", "now", 0, "ゲラ戻し", "2026-08-04")
+    md2, done2 = ts.restore_done(ts.serialize_tasks({"now": [], "future": []}),
+                                 done, "ゲラ戻し", "2026-08-04")
+    assert ts.parse_tasks(md2)["now"][0]["text"] == "ゲラ戻し"
+    assert ts.parse_done(done2) == []
+
+
+def test_restore_done_only_today():
+    """完了日が今日でない行は復帰対象外（今日の完了だけがUIに出る前提）"""
+    done = "- ✓ 昔のタスク ｜完了 2026-08-01\n"
+    assert ts.restore_done("# tasks\n", done, "昔のタスク", "2026-08-04") is None
+
+
+def test_migrate_legacy_moves_and_normalizes():
+    md = "- 原稿を進める（✓済 2026-07-20）\n- 買い物\n"
+    new_md, new_done, n = ts.migrate_legacy(md, "", "2026-08-04")
+    assert n == 1
+    assert "✓" not in new_md
+    assert "原稿を進める（✓済 2026-07-20）" in new_done
+    assert "完了 2026-08-04" in new_done
+    assert ts.parse_tasks(new_md)["future"][0]["text"] == "買い物"
+
+
+def test_migrate_legacy_noop():
+    new_md, new_done, n = ts.migrate_legacy(CANON, "", "2026-08-04")
+    assert n == 0
+    assert new_done == ""

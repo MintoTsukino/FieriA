@@ -140,3 +140,88 @@ def parse_done(md):
                 cats.append(p)
         out.append({"text": text, "category": " ".join(cats) or None, "date": date})
     return out
+
+
+def _append_done(done_md, line):
+    body = done_md.rstrip()
+    if not body:
+        body = "# tasks done"
+    return body + "\n" + line + "\n"
+
+
+def _checked(md, section, index, text):
+    """パースして照合。一致すれば(parsed_data, task)を、不一致はNoneを返す。
+    UIが持つindexとファイルの実体がズレる競合（表示中にAIがupdate_tasksで
+    書き換えた等）を、textの突き合わせで検出する。"""
+    data = parse_tasks(md)
+    items = data.get(section, [])
+    if index < 0 or index >= len(items) or items[index]["text"] != text:
+        return None
+    return data, items[index]
+
+
+def add_task(md, section, text, due=None, category=None):
+    data = parse_tasks(md)
+    data[section].append({"text": text, "due": due or None,
+                          "category": category or None})
+    return serialize_tasks(data)
+
+
+def move_task(md, section, index, text):
+    got = _checked(md, section, index, text)
+    if got is None:
+        return None
+    data, task = got
+    data[section].pop(index)
+    other = "future" if section == "now" else "now"
+    data[other].append(task)
+    return serialize_tasks(data)
+
+
+def delete_task(md, section, index, text):
+    got = _checked(md, section, index, text)
+    if got is None:
+        return None
+    data, _ = got
+    data[section].pop(index)
+    return serialize_tasks(data)
+
+
+def complete_task(md, done_md, section, index, text, today):
+    got = _checked(md, section, index, text)
+    if got is None:
+        return None
+    data, task = got
+    data[section].pop(index)
+    return serialize_tasks(data), _append_done(done_md, format_done_line(task, today))
+
+
+def restore_done(md, done_md, text, today):
+    """「今日の完了」からnowへ戻す（誤チェックの取り消し）。
+    done_md内でtext一致かつ完了日==todayの最初の行を消し、nowへ追加する。"""
+    lines = done_md.splitlines()
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        parsed = parse_done(line)
+        if parsed and parsed[0]["text"] == text and parsed[0]["date"] == today:
+            removed = parsed[0]
+            new_done = "\n".join(lines[:i] + lines[i + 1:]).rstrip()
+            new_done = (new_done + "\n") if new_done else ""
+            data = parse_tasks(md)
+            data["now"].append({"text": removed["text"], "due": None,
+                                "category": removed["category"]})
+            return serialize_tasks(data), new_done
+    return None
+
+
+def migrate_legacy(md, done_md, today):
+    """旧約束『済は✓済で残す』の✓行をtasks_done.mdへ移し、mdを正規形にする。
+    生テキストをそのまま残す（内容も旧日付表記も消さない）＝移動であって削除ではない。"""
+    data = parse_tasks(md)
+    moved = 0
+    for raw in data["legacy_done"]:
+        done_md = _append_done(done_md, "- " + raw + " ｜完了 " + today)
+        moved += 1
+    return serialize_tasks(data), done_md, moved
