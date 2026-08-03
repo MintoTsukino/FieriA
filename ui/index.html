@@ -472,6 +472,13 @@
   .turn-status-chip {
     font-size: 12px; color: var(--fg-dim); margin: 4px 0 0 6px; user-select: none;
   }
+  /* 定期処理（日記・あらすじ等）の実行中バナー。実行中は会話を受けないので、
+     入力欄の真上に出して「なぜ送れないか」がその場で分かるようにする。 */
+  #job-banner {
+    font-size: 13px; color: var(--fg-dim); user-select: none;
+    border: 1px solid var(--line); border-radius: var(--card-radius);
+    padding: 8px 12px; margin-bottom: 8px; background: var(--bg2);
+  }
   .attach-error { font-size: 12px; color: var(--danger); }
   .attach-error:empty { display: none; }
   .bubble-row.user .bubble .bubble-imgs {
@@ -881,6 +888,7 @@
         <div id="pet-handle" aria-hidden="true">⠿</div>
       </div>
       <div id="compose">
+        <div id="job-banner" style="display:none;"></div>
         <div class="attach-error" id="attach-error"></div>
         <div id="attach-preview"></div>
         <div id="compose-row">
@@ -1590,6 +1598,8 @@ function renderMarkdownToHtml(raw) {
     state.fact_layer = data.fact_layer;
     state.theme = data.theme || "light";
     applyTheme(state.theme);
+    // 起動・再描画が定期処理の実行中と重なった場合の初期表示（以後はプッシュで届く）
+    window.onJobStatus(data.job_name || "");
     state.pet_enabled = data.pet_enabled !== false;
     state.pet_character = data.pet_character || "konoha";
     updatePetVisibility();
@@ -2080,6 +2090,22 @@ function renderMarkdownToHtml(raw) {
     scrollChatToBottom();
   };
 
+  // 定期処理（日記・あらすじ等）の実行中バナー。Python側 gui._push_job_status から
+  // 開始時は表示名・終了時は""で呼ばれる。実行中は会話を受けないので、送信を試して
+  // 弾かれる前に「いま何をしているか」を入力欄の真上で見せる。
+  var runningJobName = "";
+  window.onJobStatus = function (name) {
+    runningJobName = name || "";
+    var banner = $("job-banner");
+    if (runningJobName) {
+      banner.textContent = "📔 いま" + runningJobName + "を書いとるところ…（終わるまで会話はお休み）";
+      banner.style.display = "";
+    } else {
+      banner.style.display = "none";
+    }
+    setComposeState();
+  };
+
   // --- 画像添付（ファイル選択 / クリップボード貼り付け） ---
   var ATTACH_MIME_ALLOW = { "image/png": 1, "image/jpeg": 1, "image/webp": 1, "image/gif": 1 };
   var ATTACH_MAX_BYTES = 5 * 1024 * 1024; // 5MB（b64膨張・API制限対策）
@@ -2265,7 +2291,12 @@ function renderMarkdownToHtml(raw) {
 
   function setComposeState() {
     var btn = $("send-btn");
-    if (!sending) {
+    if (!sending && runningJobName) {
+      // 定期処理の実行中は会話を受けない（Python側 send_message も同じ判定で弾く）。
+      // 押せない理由は#job-bannerが出しているので、ここはボタンの無効化だけ。
+      btn.textContent = "送信";
+      btn.disabled = true;
+    } else if (!sending) {
       btn.textContent = "送信";
       btn.disabled = false;
     } else if (stopping) {
@@ -2335,6 +2366,12 @@ function renderMarkdownToHtml(raw) {
     var text = box.value.trim();
     var images = attachedImages.slice();
     if ((!text && !images.length) || sending) return;
+    // 定期処理の実行中は、入力欄を空にする前にここで止める（打った文を失わせない）。
+    // Python側の判定が最終権限だが、そこまで行くと入力欄は既に空になっている。
+    if (runningJobName) {
+      showToast("いま" + runningJobName + "を書いとるところ。終わったら送ってな");
+      return;
+    }
     sending = true;
     stopping = false;
     setComposeState();
@@ -2342,7 +2379,7 @@ function renderMarkdownToHtml(raw) {
     // 紛れ込まないためのレースガード（identityRequestSeqと同じ考え方）。ログ自体は
     // engine.process_turn内で既に永続化済みなので、表示をスキップしても記憶は失われない。
     var soulAtSend = state.active_soul;
-    addBubble("user", text, null, images);
+    var userRow = addBubble("user", text, null, images);
     box.value = "";
     box.style.height = "auto";  // 送信後は1行の高さに戻す（autoGrowInputと対）
     updateSendHint();
@@ -2361,6 +2398,17 @@ function renderMarkdownToHtml(raw) {
       if (state.active_soul !== soulAtSend) {
         // 待機中にSOULが変わっていたら、成功/失敗問わず古い応答は画面に出さない
         setPetState("idle");
+        return;
+      }
+      if (result && result.busy_job) {
+        // JS側の事前判定をすり抜けて（送信直後に定期処理が始まって）弾かれた場合。
+        // 送信は成立していないので、吹き出しを取り消して打った文を入力欄へ戻す。
+        setPetState("idle");
+        if (userRow && userRow.parentNode) userRow.parentNode.removeChild(userRow);
+        box.value = text;
+        attachedImages = images;
+        renderAttachPreview();
+        showToast(result.error);
         return;
       }
       if (result && result.error) {

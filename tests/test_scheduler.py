@@ -1240,3 +1240,52 @@ def test_every_job_has_a_default_hour():
     for job in scheduler.JOBS:
         assert isinstance(job["hour"], int)
         assert 0 <= job["hour"] <= 23
+
+
+# --- ジョブ実行の通知（画面バナー用） 2026-08-03 ---
+
+def test_tick_notifies_job_start_and_end():
+    sid = _soul_with_two_pending_jobs("ジョブ通知テスト")
+    seen = []
+    sch = _fresh_sch(_cfg(), FakeLLM(), sid)
+    sch._on_job_change = seen.append
+
+    sch.tick(now=_dt(hour=23))
+
+    assert seen == ["日次日記", ""]
+
+
+def test_tick_notifies_end_even_when_job_raises():
+    import scheduler
+    seen = []
+    sch = _fresh_sch(_cfg(), FakeLLM(), "dummy-soul")
+    sch._on_job_change = seen.append
+
+    def broken_job(cfg, llm, soul_id):
+        raise RuntimeError("想定外")
+
+    original = scheduler.JOBS
+    scheduler.JOBS = [{"id": "daily_chronicle", "hour": 0, "name": "こわれ",
+                        "description": "x", "run": broken_job}]
+    try:
+        try:
+            sch.tick(now=_dt(hour=23))
+        except RuntimeError:
+            pass
+    finally:
+        scheduler.JOBS = original
+
+    assert seen == ["こわれ", ""]
+
+
+def test_tick_survives_broken_notifier():
+    """画面通知の失敗（ウィンドウ破棄直後等）でジョブ自体を巻き添えにしない。"""
+    sid = _soul_with_two_pending_jobs("通知失敗テスト")
+    sch = _fresh_sch(_cfg(), FakeLLM(), sid)
+
+    def boom(_name):
+        raise RuntimeError("window gone")
+
+    sch._on_job_change = boom
+
+    assert sch.tick(now=_dt(hour=23)) == "daily_chronicle"

@@ -2367,3 +2367,41 @@ def test_chat_busy_reports_conversation_and_import():
     b._busy_turns = 0
     b._importing = True
     assert b._chat_busy() is True
+
+
+def test_send_message_block_marks_busy_job_flag():
+    """UI側が「入力欄を空にせず戻す」判定に使う機械可読フラグ。"""
+    import gui
+    b = gui.Bridge()
+    b._engine = object()
+    b._scheduler = _StubScheduler(running=True, name="週次あらすじ")
+
+    result = b.send_message("やっほ")
+
+    assert result["busy_job"] is True
+
+
+def test_boot_reports_running_job_for_banner():
+    import gui
+    b = gui.Bridge()
+    b._scheduler = _StubScheduler(running=True, name="月次あらすじ")
+
+    data = b.boot()
+
+    assert data["job_name"] == "月次あらすじ"
+
+
+def test_boot_reports_empty_job_name_when_idle():
+    import gui
+    b = gui.Bridge()
+    b._scheduler = _StubScheduler(running=False)
+
+    assert b.boot()["job_name"] == ""
+
+
+def test_push_job_status_is_safe_without_window():
+    import gui
+    b = gui.Bridge()
+    b._window = None
+
+    b._push_job_status("日次日記")  # 例外が出ないこと

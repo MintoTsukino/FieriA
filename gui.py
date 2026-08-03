@@ -164,6 +164,7 @@ class Bridge:
             self._scheduler.start(
                 lambda: (self._cfg, self._llm, self._cfg.get("active_soul")),
                 is_busy=self._chat_busy,
+                on_job_change=self._push_job_status,
             )
         self._importing = False
         self._import_stop = False
@@ -284,6 +285,9 @@ class Bridge:
             "today_log": soul_mod.read_today_log(active_soul) if active_soul else [],
             "llm_summary": self._llm_summary(),
             "soul_llm": self._cfg.get("soul_llm", {}),
+            # 起動・再描画が定期処理の実行中と重なった場合にバナーを出すための初期値
+            # （以後の変化は_push_job_statusのプッシュで届く）。
+            "job_name": self._scheduler.running_job_name(),
         }
 
     def send_message(self, text, images=None):
@@ -295,7 +299,10 @@ class Bridge:
         # 「会話とジョブが同時に走る」状態は両側から塞がれている。
         if self._scheduler.is_running_job():
             job_name = self._scheduler.running_job_name() or "定期処理"
-            return {"error": f"いま{job_name}を書いとるところ。終わるまでちょい待ってな"}
+            # busy_jobフラグはUI側が「入力欄を空にせず打った文を戻す」判定に使う
+            # （送信は成立していないので、打った文が消えるのは損失にあたる）。
+            return {"error": f"いま{job_name}を書いとるところ。終わるまでちょい待ってな",
+                    "busy_job": True}
         if not self._engine:
             return {"error": "SOULが未作成。設定からSOULを作ってください"}
         oversized = _oversized_pdf_error(images)
@@ -352,6 +359,16 @@ class Bridge:
         問い返す形になり、常時Trueで自滅するため）。"""
         with self._busy_lock:
             return self._busy_turns > 0 or self._importing
+
+    def _push_job_status(self, job_name):
+        """定期処理の開始/終了をJS側へ通知する（表示専用のバナー）。
+        スケジューラのdaemonスレッドから呼ばれる。_push_turn_statusと同じく
+        ウィンドウ不在・JS例外は握りつぶす。"""
+        try:
+            self._window.evaluate_js(
+                "window.onJobStatus && window.onJobStatus(" + json.dumps(job_name) + ")")
+        except Exception:
+            pass
 
     def _push_turn_status(self, kind):
         """ツール実行状態（"memory_write"/"tools"）をJS側へ通知する（表示専用）。

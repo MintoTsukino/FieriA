@@ -378,6 +378,7 @@ class Scheduler:
     def __init__(self):
         self._get_context = None
         self._is_busy = None
+        self._on_job_change = None
         self._stop_event = threading.Event()
         self._thread = None
         # job_id -> 最後に実行した日付("YYYY-MM-DD")。ジョブごとに1日1回のゲート。
@@ -396,11 +397,14 @@ class Scheduler:
         self._running_lock = threading.Lock()
         self._running_job = False
 
-    def start(self, get_context, is_busy=None):
+    def start(self, get_context, is_busy=None, on_job_change=None):
         """get_context: () -> (cfg, llm, soul_id or None)
-        is_busy: () -> bool。Trueの間はジョブを開始しない（会話・インポート優先）。"""
+        is_busy: () -> bool。Trueの間はジョブを開始しない（会話・インポート優先）。
+        on_job_change: (job_name) -> None。開始時は表示名、終了時は""で呼ばれる
+        （画面のバナー表示用。失敗しても握りつぶす＝画面都合でジョブを壊さない）。"""
         self._get_context = get_context
         self._is_busy = is_busy
+        self._on_job_change = on_job_change
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
@@ -446,6 +450,7 @@ class Scheduler:
         with self._running_lock:
             self._running_job = True
             self._running_job_name = job["name"]
+        self._notify_job_change(job["name"])
         try:
             result = job["run"](cfg, llm, soul_id)
         finally:
@@ -455,6 +460,7 @@ class Scheduler:
             with self._running_lock:
                 self._running_job = False
                 self._running_job_name = ""
+            self._notify_job_change("")
         if self._results_date != today:
             self._results_date = today
             self._day_results = {}
@@ -479,6 +485,16 @@ class Scheduler:
                 continue
             return job
         return None
+
+    def _notify_job_change(self, job_name):
+        """画面バナーへの通知。表示都合の失敗（ウィンドウ破棄直後・JS例外）で
+        ジョブ本体やフラグ復帰を巻き添えにしないよう、例外は必ず握りつぶす。"""
+        if self._on_job_change is None:
+            return
+        try:
+            self._on_job_change(job_name)
+        except Exception:
+            pass
 
     def running_job_name(self):
         """実行中ジョブの表示名（idle時は""）。gui.send_messageが「いま○○を書いとる」と
