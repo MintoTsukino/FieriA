@@ -1071,6 +1071,14 @@
           </select>
         </div>
         <div class="hint">対応モデルのみ有効。非対応モデルでは無視される</div>
+        <div class="row">
+          <label>ツール呼び出し</label>
+          <select id="provider-toolmode" title="ネイティブ=APIのtools機能で呼ぶ（対応モデルで安定）。フェンス=従来の本文内JSON。自動=対応プロバイダならネイティブ">
+            <option value="">自動（推奨）</option>
+            <option value="native">ネイティブ</option>
+            <option value="fence">フェンス（本文内JSON）</option>
+          </select>
+        </div>
         <div class="row" id="provider-baseurl-row" style="display:none;">
           <label>base_url</label>
           <input type="text" id="provider-baseurl">
@@ -4087,6 +4095,7 @@ function renderMarkdownToHtml(raw) {
     var current = providers[llm.provider] || {};
     $("provider-model").value = current.model || "";
     $("provider-effort").value = current.reasoning_effort || "";
+    $("provider-toolmode").value = current.tool_mode || "";
     var isCustom = llm.provider === "custom";
     $("provider-baseurl-row").style.display = isCustom ? "" : "none";
     $("provider-baseurl").value = isCustom ? (current.base_url || "") : "";
@@ -4163,6 +4172,7 @@ function renderMarkdownToHtml(raw) {
     var current = providers[name] || {};
     $("provider-model").value = current.model || "";
     $("provider-effort").value = current.reasoning_effort || "";
+    $("provider-toolmode").value = current.tool_mode || "";
     var isCustom = name === "custom";
     $("provider-baseurl-row").style.display = isCustom ? "" : "none";
     $("provider-baseurl").value = isCustom ? (current.base_url || "") : "";
@@ -4381,6 +4391,7 @@ function renderMarkdownToHtml(raw) {
     llm.providers[name] = llm.providers[name] || {};
     llm.providers[name].model = $("provider-model").value;
     llm.providers[name].reasoning_effort = $("provider-effort").value;
+    llm.providers[name].tool_mode = $("provider-toolmode").value;
     if (name === "custom") {
       llm.providers[name].base_url = $("provider-baseurl").value;
     }

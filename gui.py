@@ -611,6 +611,12 @@ class Bridge:
                 if isinstance(entry, dict):
                     val = str(entry.get("reasoning_effort", "") or "").strip().lower()
                     entry["reasoning_effort"] = val if val in REASONING_EFFORTS else ""
+                    # ツール呼び出し方式: プロバイダentryごと。不正・空・autoはキーごと落とす(=auto)
+                    tm = str(entry.get("tool_mode", "") or "").strip().lower()
+                    if tm in ("native", "fence"):
+                        entry["tool_mode"] = tm
+                    else:
+                        entry.pop("tool_mode", None)  # auto=キー無し
         if "theme" in payload:
             # pet_character等と同じホワイトリスト正規化。未知の値（改ざん・旧設定の
             # 残骸等）は既定の"light"へ倒す（config_mod.THEME_IDSが正）。
