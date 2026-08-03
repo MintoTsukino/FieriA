@@ -405,7 +405,11 @@ def test_get_latest_diary_empty_shape_when_no_entries():
     bridge = gui.Bridge()
     bridge._cfg["active_soul"] = sid
 
-    assert bridge.get_latest_diary() == {"date": None, "text": ""}
+    diary = bridge.get_latest_diary()
+
+    assert diary["date"] is None
+    assert diary["text"] == ""
+    assert diary["note"]  # 日記が1本も無いSOULには「いつ書かれるか」の案内を出す
 
 
 def test_get_latest_diary_empty_shape_when_no_active_soul():
@@ -413,7 +417,7 @@ def test_get_latest_diary_empty_shape_when_no_active_soul():
     bridge = gui.Bridge()
     bridge._cfg["active_soul"] = None
 
-    assert bridge.get_latest_diary() == {"date": None, "text": ""}
+    assert bridge.get_latest_diary() == {"date": None, "text": "", "note": ""}
 
 
 def test_read_log_empty_when_no_active_soul():
@@ -2405,3 +2409,68 @@ def test_push_job_status_is_safe_without_window():
     b._window = None
 
     b._push_job_status("日次日記")  # 例外が出ないこと
+
+
+# --- 日記パネルの「いつ書かれるか」案内 2026-08-03 ---
+# 即時日記が既定OFFになり、閉じた直後に今日の日記が無いのが正常動作になったため、
+# 「壊れてるのか待てばいいのか」がパネル上で分かるようにする。
+
+def _soul_with_diary(bridge, name, date_str=None, body="# 日記\n本文\n"):
+    import soul
+    sid = soul.create_soul(name)
+    bridge._cfg["active_soul"] = sid
+    if date_str:
+        soul.write_file(sid, f"chronicle/{date_str}.md", body)
+    return sid
+
+
+def test_latest_diary_note_says_when_today_will_be_written():
+    import gui
+    b = gui.Bridge()
+    _soul_with_diary(b, "日記案内テスト")
+
+    note = b.get_latest_diary()["note"]
+
+    assert "0時" in note
+
+
+def test_latest_diary_note_follows_hour_override():
+    import gui
+    b = gui.Bridge()
+    _soul_with_diary(b, "日記案内時刻テスト")
+    b._cfg["scheduled_job_hours"] = {"daily_chronicle": 3}
+
+    assert "3時" in b.get_latest_diary()["note"]
+
+
+def test_latest_diary_note_when_immediate_mode_on():
+    import gui
+    b = gui.Bridge()
+    _soul_with_diary(b, "日記案内即時テスト")
+    b._cfg["wrapup_on_close"] = True
+
+    note = b.get_latest_diary()["note"]
+
+    assert "閉じ" in note
+    assert "0時" not in note
+
+
+def test_latest_diary_has_no_note_when_todays_diary_exists():
+    import datetime
+    import gui
+    b = gui.Bridge()
+    today = datetime.date.today().isoformat()
+    _soul_with_diary(b, "本日分ありテスト", today, "# 今日の日記\nもう書けとる\n")
+
+    diary = b.get_latest_diary()
+
+    assert diary["date"] == today
+    assert diary["note"] == ""
+
+
+def test_latest_diary_note_empty_without_soul():
+    import gui
+    b = gui.Bridge()
+    b._cfg["active_soul"] = None
+
+    assert b.get_latest_diary() == {"date": None, "text": "", "note": ""}

@@ -1299,7 +1299,10 @@
     <div id="side-scroll">
       <details id="diary-group" open>
         <summary id="diary-title">日記</summary>
-        <div class="card"><div id="diary-body" class="empty">まだ書かれてない</div></div>
+        <div class="card">
+          <div id="diary-body" class="empty">まだ書かれてない</div>
+          <div class="hint" id="diary-note" style="display:none;"></div>
+        </div>
       </details>
       <details id="side-files-group" open>
         <summary id="side-files-title">記憶ファイル</summary>
@@ -3093,8 +3096,14 @@ function renderMarkdownToHtml(raw) {
       } else {
         title.textContent = "日記";
         body.classList.add("empty");
-        body.textContent = "まだ日記はない（初日の終わりに書かれる）";
+        body.textContent = "まだ日記はない";
       }
+      // 当日分がまだ無いときだけ「いつ書かれるか」を出す（Python側が判断して
+      // noteを空にしてくる）。閉じた直後に今日の分が無いのは既定の正常動作なので、
+      // 壊れているのか待てばよいのかをここで区別できるようにする。
+      var note = $("diary-note");
+      note.textContent = (diary && diary.note) || "";
+      note.style.display = note.textContent ? "" : "none";
     });
   }
 

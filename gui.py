@@ -1019,17 +1019,30 @@ class Bridge:
         return soul_mod.read_file(self._cfg["active_soul"], rel_path)
 
     def get_latest_diary(self):
-        """右パネル「日記」用。直近の日次日記を{"date","text"}で返す。1本も無ければ
+        """右パネル「日記」用。直近の日次日記を{"date","text","note"}で返す。1本も無ければ
         date=None, text=""（日記は「今日書かれてるはず」ではなく「セッション終了時に
         書かれる」ため、開いてる間はほぼ常に当日分が無い＝表示するなら最新のもの、
-        という2026-07-22の実機フィードバックに基づく）。"""
+        という2026-07-22の実機フィードバックに基づく）。
+        noteは「今日の分がいつ書かれるか」の案内文（当日分が既にあれば""）。
+        即時日記が既定OFFになり『閉じた直後に今日の分が無い』のが正常動作に
+        なったため、壊れているのか待てばよいのかを画面で判別できるようにする。"""
         sid = self._cfg.get("active_soul")
         if not sid:
-            return {"date": None, "text": ""}
-        latest = soul_mod.latest_chronicle(sid)
-        if latest is None:
-            return {"date": None, "text": ""}
-        return latest
+            return {"date": None, "text": "", "note": ""}
+        latest = soul_mod.latest_chronicle(sid) or {"date": None, "text": ""}
+        today = datetime.date.today().isoformat()
+        note = "" if latest.get("date") == today else self._diary_note()
+        return {"date": latest.get("date"), "text": latest.get("text", ""), "note": note}
+
+    def _diary_note(self):
+        """今日の日記がいつ書かれるかの案内文。即時日記(wrapup_on_close)がONなら
+        その場で書かれ、OFFならdaily_chronicleジョブの実行時刻に書かれる。"""
+        if self._cfg.get("wrapup_on_close", False):
+            return "今日の分は、アプリを閉じるかSOULを切り替えたときに書かれるじょ"
+        daily = next(j for j in JOBS if j["id"] == "daily_chronicle")
+        hour = scheduler_mod._job_hour(daily, self._cfg.get("scheduled_job_hours", {}))
+        return (f"今日の分は{hour}時ごろに書かれるじょ"
+                "（そのときアプリが閉じてたら、次に開いたときに書く）")
 
     def list_soul_files(self):
         sid = self._cfg.get("active_soul")
