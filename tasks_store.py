@@ -27,7 +27,7 @@ NOW_HEADING = "## いまやる"
 FUTURE_HEADING = "## これから"
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_DONE_DATE_RE = re.compile(r"完了\s*(\d{4}-\d{2}-\d{2})")
+_DONE_DATE_RE = re.compile(r"^完了\s*(\d{4}-\d{2}-\d{2})$")
 _BULLET_RE = re.compile(r"^(?:[-*・]\s*)")
 
 
@@ -113,7 +113,11 @@ def format_done_line(task, done_date):
 
 def parse_done(md):
     """tasks_done.md全文を[{"text","category","date"}...]へ。
-    完了日は「完了 YYYY-MM-DD」断片から。無い行（移行遺産）はdate=None。"""
+    完了日は「完了 YYYY-MM-DD」断片から。無い行（移行遺産）はdate=None。
+
+    行を｜/|で断片に分割してから各断片を分類する（parse_lineと同じ順不同の発想）。
+    「完了 YYYY-MM-DD」断片が先頭以外のどこに来てもカテゴリを消さない
+    （旧実装は完了断片より後ろの断片を無条件に切り捨てておりデータロスだった）。"""
     out = []
     for line in md.splitlines():
         s = line.strip()
@@ -122,13 +126,17 @@ def parse_done(md):
         s = _strip_bullet(s)
         if s.startswith("✓"):
             s = s[1:].strip()
-        m = _DONE_DATE_RE.search(s)
-        date = m.group(1) if m else None
-        if m:
-            s = s[:m.start()].strip().rstrip("｜|").strip()
         parts = [p.strip() for p in re.split(r"[｜|]", s) if p.strip()]
         if not parts:
             continue
-        out.append({"text": parts[0], "category": " ".join(parts[1:]) or None,
-                    "date": date})
+        text = parts[0]
+        date = None
+        cats = []
+        for p in parts[1:]:
+            m = _DONE_DATE_RE.match(p)
+            if date is None and m:
+                date = m.group(1)
+            else:
+                cats.append(p)
+        out.append({"text": text, "category": " ".join(cats) or None, "date": date})
     return out

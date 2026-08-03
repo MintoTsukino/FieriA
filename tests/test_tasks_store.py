@@ -123,3 +123,9 @@ def test_parse_done_legacy_line_without_date():
     """移行で入った日付なし行も落とさず拾う（dateはNone）"""
     got = ts.parse_done("- ✓ 昔の済みタスク\n")
     assert got == [{"text": "昔の済みタスク", "category": None, "date": None}]
+
+
+def test_parse_done_category_after_date_not_lost():
+    """完了断片の後ろに来たカテゴリも捨てない（順不同・データロス禁止）"""
+    got = ts.parse_done("- ✓ ゲラ戻し ｜完了 2026-08-04 ｜執筆\n")
+    assert got == [{"text": "ゲラ戻し", "category": "執筆", "date": "2026-08-04"}]
