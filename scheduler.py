@@ -392,6 +392,12 @@ class Scheduler:
         # 1回のtickの結果だけでは「今日何が走ったか」を表せないので累積する）。
         self._day_results = {}
         self._results_date = None
+        # (job_id, soul_id) -> {"at": 実行時刻ISO, "result": そのジョブの戻り値}。
+        # 画面の定期処理カード用（gui.get_scheduled_jobs）。last_run_infoが
+        # 「最後に何かが走った時刻」1本なのに対し、こちらはジョブごと・SOULごとに
+        # 持つ。1tickにつき1ジョブになった今、前者を各行に出すと「まだ走っていない
+        # ジョブ」が他ジョブの時刻を借りて『走ったが対象なし』と嘘をつくため。
+        self._job_runs = {}
         self.last_run_info = {"last_run": None, "written": []}
         self._running_job_name = ""
         # 終了確認ダイアログ(gui.py on_closing)用: JOBSループ実行中フラグ。
@@ -469,6 +475,10 @@ class Scheduler:
             self._results_date = today
             self._day_results = {}
         self._day_results[job["id"]] = result
+        self._job_runs[(job["id"], soul_id)] = {
+            "at": now.isoformat(timespec="seconds"),
+            "result": result,
+        }
         self.last_run_info = {
             "last_run": now.isoformat(timespec="seconds"),
             "written": self._day_results.get("daily_chronicle", []),
@@ -499,6 +509,14 @@ class Scheduler:
             self._on_job_change(job_name)
         except Exception:
             pass
+
+    def results_for(self, soul_id):
+        """そのSOULのジョブ実行実績を {job_id: {"at","result"}} で返す。
+        走ったことがないジョブはキーごと存在しない（＝画面は「まだ未実行」を出す）。"""
+        if not soul_id:
+            return {}
+        return {job_id: info for (job_id, sid), info in self._job_runs.items()
+                if sid == soul_id}
 
     def running_job_name(self):
         """実行中ジョブの表示名（idle時は""）。gui.send_messageが「いま○○を書いとる」と

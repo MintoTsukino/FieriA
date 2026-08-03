@@ -1345,8 +1345,10 @@ class Bridge:
 
     # --- 定期処理（可視化＋ON/OFF） ---
     def get_scheduled_jobs(self):
-        info = self._scheduler.last_run_info
-        jobs_result = info.get("jobs", {})
+        # 実績はアクティブSOULのぶんを、ジョブごとに引く。全ジョブへ「最後に何かが
+        # 走った時刻」を配ると、まだ走っていないジョブが結果空＝「対象なし」となり、
+        # 走ってもいないのに『走ったが何も無かった』と嘘をつく（1tick1ジョブ化の副作用）。
+        runs = self._scheduler.results_for(self._cfg.get("active_soul"))
         scheduled_cfg = self._cfg.get("scheduled_jobs", {})
         hours_cfg = self._cfg.get("scheduled_job_hours", {})
         return [{
@@ -1355,8 +1357,8 @@ class Bridge:
             "description": job["description"],
             "enabled": scheduled_cfg.get(job["id"], True),
             "hour": scheduler_mod._job_hour(job, hours_cfg),
-            "last_run": info["last_run"],
-            "last_result": jobs_result.get(job["id"], []),
+            "last_run": runs.get(job["id"], {}).get("at"),
+            "last_result": runs.get(job["id"], {}).get("result") or [],
         } for job in JOBS]
 
     def set_scheduled_job(self, job_id, enabled):

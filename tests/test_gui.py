@@ -2474,3 +2474,78 @@ def test_latest_diary_note_empty_without_soul():
     b._cfg["active_soul"] = None
 
     assert b.get_latest_diary() == {"date": None, "text": "", "note": ""}
+
+
+# --- 定期処理カードの表示はジョブごと・SOULごと 2026-08-03 ---
+# 1tick1ジョブにした結果、まだ走っていないジョブにも「最後に何かが走った時刻」が
+# 表示され、実行結果が空なので「対象なし」＝走ったが何も無かった、と嘘をついていた。
+
+def _run_one_job(bridge, soul_id, hour=23):
+    import datetime
+    bridge._cfg["active_soul"] = soul_id
+    bridge._scheduler._get_context = lambda: (bridge._cfg, _FakeLLM(), soul_id)
+    return bridge._scheduler.tick(
+        now=datetime.datetime.fromisoformat("2026-01-01T%02d:30:00" % hour))
+
+
+class _FakeLLM:
+    def chat(self, messages, max_tokens=None):
+        return "# 日記\n本文"
+
+
+def test_unrun_job_shows_no_last_run():
+    """走ったジョブだけが時刻を持ち、走っていないジョブは「未実行」のまま。"""
+    import gui
+    import soul
+    b = gui.Bridge()
+    sid = soul.create_soul("カード表示テスト")
+    soul.append_file(sid, os.path.join("logs", "2025-12-30.jsonl"),
+                      '{"who": "user", "text": "過去の話"}\n')
+
+    assert _run_one_job(b, sid) == "daily_chronicle"
+    jobs = {j["id"]: j for j in b.get_scheduled_jobs()}
+
+    assert jobs["daily_chronicle"]["last_run"]
+    assert jobs["weekly_digest"]["last_run"] is None
+
+
+def test_last_run_is_per_soul():
+    """コノハで走った実績が、クロエのカードに出てこない。"""
+    import gui
+    import soul
+    b = gui.Bridge()
+    sid_a = soul.create_soul("カードSOUL_A")
+    sid_b = soul.create_soul("カードSOUL_B")
+    soul.append_file(sid_a, os.path.join("logs", "2025-12-30.jsonl"),
+                      '{"who": "user", "text": "Aの話"}\n')
+    _run_one_job(b, sid_a)
+
+    b._cfg["active_soul"] = sid_b
+    jobs = {j["id"]: j for j in b.get_scheduled_jobs()}
+
+    assert jobs["daily_chronicle"]["last_run"] is None
+
+
+def test_last_result_belongs_to_its_own_job():
+    import gui
+    import soul
+    b = gui.Bridge()
+    sid = soul.create_soul("カード結果テスト")
+    soul.append_file(sid, os.path.join("logs", "2025-12-30.jsonl"),
+                      '{"who": "user", "text": "過去の話"}\n')
+    _run_one_job(b, sid)
+
+    jobs = {j["id"]: j for j in b.get_scheduled_jobs()}
+
+    assert jobs["daily_chronicle"]["last_result"] == ["2025-12-30"]
+    assert jobs["weekly_digest"]["last_result"] == []
+
+
+def test_scheduled_jobs_safe_without_active_soul():
+    import gui
+    b = gui.Bridge()
+    b._cfg["active_soul"] = None
+
+    jobs = {j["id"]: j for j in b.get_scheduled_jobs()}
+
+    assert jobs["daily_chronicle"]["last_run"] is None
