@@ -461,3 +461,19 @@ def semantic_search(soul_id, query_vec, limit=8):
         return scored[: int(limit)]
     except Exception:
         return []
+
+
+def vector_count(soul_id):
+    """埋め込み済み断片数（設定画面の「埋め込み済み: N断片」表示用）。
+    インデックス未作成・テーブル無し・例外はすべて0を返す（表示専用・会話を壊さない）。"""
+    try:
+        db_path = _db_path(soul_id)
+        if not os.path.isfile(db_path):
+            return 0
+        con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            return con.execute("SELECT COUNT(*) FROM vectors").fetchone()[0]
+        finally:
+            con.close()
+    except Exception:
+        return 0

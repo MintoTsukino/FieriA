@@ -2185,3 +2185,27 @@ def test_ensure_engine_uses_effective_llm_cfg_for_active_soul(monkeypatch):
     bridge._ensure_engine()
 
     assert captured["provider"] == "openrouter"
+
+
+# --- 埋め込み状況表示（設定画面「埋め込み済み: N断片」）2026-08-03 ---
+# インデックスの状態が見えず「ONにしたのに効かない」迷子が起きた実話への再発防止。
+
+def test_embedding_status_returns_count_and_running_flag(monkeypatch):
+    import gui
+    import search as search_mod
+    import soul
+    b = gui.Bridge()
+    sid = soul.create_soul("状況表示テスト")
+    b._cfg["active_soul"] = sid
+    monkeypatch.setattr(search_mod, "vector_count", lambda s: 42)
+    st = b.embedding_status()
+    assert st["count"] == 42
+    assert st["running"] is False
+
+
+def test_embedding_status_safe_without_soul():
+    import gui
+    b = gui.Bridge()
+    b._cfg["active_soul"] = None
+    st = b.embedding_status()
+    assert st == {"count": 0, "running": False}

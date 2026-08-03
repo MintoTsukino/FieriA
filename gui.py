@@ -675,6 +675,17 @@ class Bridge:
         return {"ok": True}
 
     # --- セマンティック検索（Ollama埋め込み） ---
+    def embedding_status(self):
+        """埋め込み状況（設定画面の「埋め込み済み: N断片」表示用）。
+        countは現在のSOULのベクトル断片数、runningは背景インデクサが実行中か。
+        「ONにしたのに効かない」が外から見えなかった実話（2026-08-03）への再発防止。"""
+        soul_id = self._cfg.get("active_soul")
+        if not soul_id:
+            return {"count": 0, "running": False}
+        with self._indexer_lock:
+            running = soul_id in self._indexer_running
+        return {"count": search_mod.vector_count(soul_id), "running": running}
+
     def embedding_test(self):
         """設定画面の接続テスト用。1件embedしてOllama到達性を確認する。
         tts_testと同じ「テストだけは失敗を表示してよい」方針（Global Constraints）——

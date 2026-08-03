@@ -1177,6 +1177,7 @@
         </div>
         <div class="row" style="margin-top:12px;">
           <button class="ghost" id="embedding-test-btn">接続テスト</button>
+          <span class="hint" id="embedding-status-label">埋め込み済み: –</span>
         </div>
         <div class="hint">Ollamaと埋め込みモデルが必要。無効時や接続できない時は従来の字面検索で動く</div>
       </div>
@@ -3540,6 +3541,17 @@ function renderMarkdownToHtml(raw) {
     saveEmbedding(e, "モデル名を保存した");
   });
 
+  function refreshEmbeddingStatus() {
+    // 「ONにしたのに効いてない」が外から見えなかった迷子事件（2026-08-03）への
+    // 再発防止。断片数が0のままなら再起動や接続を疑えるし、実行中も分かる。
+    if (!window.pywebview || !window.pywebview.api.embedding_status) return;
+    window.pywebview.api.embedding_status().then(function (st) {
+      var label = "埋め込み済み: " + st.count + "断片";
+      if (st.running) label += "（構築中…）";
+      $("embedding-status-label").textContent = label;
+    }).catch(function () {});
+  }
+
   $("embedding-test-btn").addEventListener("click", function () {
     var btn = $("embedding-test-btn");
     btn.disabled = true;
@@ -3550,6 +3562,7 @@ function renderMarkdownToHtml(raw) {
       } else {
         showToast(res.error || "接続テストに失敗した", "error");
       }
+      refreshEmbeddingStatus();
     }).catch(function (err) {
       btn.disabled = false;
       showToast("接続テストに失敗した: " + err, "error");
@@ -4410,6 +4423,7 @@ function renderMarkdownToHtml(raw) {
       renderWorkspaceCard();
       renderAutoRecallCard();
       renderEmbeddingCard();
+      refreshEmbeddingStatus();
       refreshImportCount();
       renderScheduledJobs();
     },

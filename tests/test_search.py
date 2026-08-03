@@ -496,3 +496,17 @@ def test_fts_rebuild_preserves_vectors(monkeypatch):
     # FTS側も正しく再構築されている（新ファイルが検索できる）
     hits = search.search(sid, "引き金になる新しい記憶")
     assert any(h["source"] == "wiki/新規.md" for h in hits)
+
+
+def test_vector_count_zero_without_table_and_counts_after_update(monkeypatch):
+    """埋め込み状況表示（設定画面の「埋め込み済み: N断片」）用。テーブル未作成でも
+    例外を出さず0を返し、update_vectors後は断片数を返す。"""
+    import embed
+    import search
+    import soul as soul_mod
+    sid = soul_mod.create_soul("断片数テスト", "コア")
+    assert search.vector_count(sid) == 0  # インデックス自体まだ無い
+    monkeypatch.setattr(embed, "embed_texts_batched",
+                        lambda u, m, texts, batch=32: [[1.0, 0.0] for _ in texts])
+    search.update_vectors(sid, {"enabled": True, "engine_url": "http://x", "model": "m"})
+    assert search.vector_count(sid) > 0
