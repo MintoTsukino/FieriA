@@ -202,3 +202,22 @@ def test_native_system_prompt_has_note_but_no_fence_spec():
 
     assert "『』" in captured["system"]           # 書く規範は残る
     assert "fieria-tool" not in captured["system"]  # フェンス作法は教えない
+
+
+def test_native_streaming_deltas_reach_on_delta():
+    class StreamNativeLLM(FakeNativeLLM):
+        def chat_tools_stream(self, messages, tools, max_tokens=None, on_delta=None):
+            result = self.chat_tools(messages, tools, max_tokens)
+            if on_delta and result["text"]:
+                on_delta(result["text"])
+            return result
+
+    sid = soul_mod.create_soul("ネイティブストリームテスト", "コア")
+    llm = StreamNativeLLM([_final("流れる返事じょ")])
+    eng = engine_mod.Engine(_cfg(), llm, sid)
+    deltas = []
+
+    result = eng.process_turn("やあ", on_delta=deltas.append)
+
+    assert result["reply"] == "流れる返事じょ"
+    assert deltas == ["流れる返事じょ"]

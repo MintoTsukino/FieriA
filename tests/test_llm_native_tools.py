@@ -130,3 +130,64 @@ def test_supports_native_tools_flags():
     assert llm_mod.OpenAICompatLLM.supports_native_tools is True
     assert getattr(llm_mod.GeminiLLM, "supports_native_tools", False) is False
     assert getattr(llm_mod.FallbackLLM, "supports_native_tools", False) is False
+
+
+def _fake_stream(monkeypatch, lines):
+    def fake(url, payload, headers=None, timeout=120):
+        fake.payload = payload
+        return iter(lines)
+
+    monkeypatch.setattr(llm, "_post_sse_stream", fake)
+    return fake
+
+
+def _sse(obj):
+    return "data: " + json.dumps(obj)
+
+
+def test_chat_tools_stream_assembles_fragmented_arguments(monkeypatch):
+    """id/nameは初回チャンクのみ・argumentsは断片で届く、の標準挙動を組み立てる。"""
+    _fake_stream(monkeypatch, [
+        _sse({"choices": [{"delta": {"content": "書くじょ"}}]}),
+        _sse({"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "id": "c1",
+             "function": {"name": "write_wiki", "arguments": '{"topic"'}}]}}]}),
+        _sse({"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "function": {"arguments": ': "T", "content": "C"}'}}]}}]}),
+        "data: [DONE]",
+    ])
+    deltas = []
+
+    result = _mk().chat_tools_stream([{"role": "user", "content": "hi"}], TOOLS,
+                                       on_delta=deltas.append)
+
+    assert result["text"] == "書くじょ"
+    assert deltas == ["書くじょ"]
+    assert result["tool_calls"] == [
+        {"id": "c1", "name": "write_wiki",
+         "arguments": {"topic": "T", "content": "C"}}]
+
+
+def test_chat_tools_stream_two_parallel_calls_by_index(monkeypatch):
+    _fake_stream(monkeypatch, [
+        _sse({"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "id": "a", "function": {"name": "save_lesson",
+                                                   "arguments": '{"text": "1"}'}}]}}]}),
+        _sse({"choices": [{"delta": {"tool_calls": [
+            {"index": 1, "id": "b", "function": {"name": "save_sacred",
+                                                   "arguments": '{"text": "2"}'}}]}}]}),
+        "data: [DONE]",
+    ])
+
+    result = _mk().chat_tools_stream([{"role": "user", "content": "hi"}], TOOLS)
+
+    assert [c["name"] for c in result["tool_calls"]] == ["save_lesson", "save_sacred"]
+
+
+def test_chat_tools_stream_sends_tools_and_stream_true(monkeypatch):
+    fake = _fake_stream(monkeypatch, ["data: [DONE]"])
+
+    _mk().chat_tools_stream([{"role": "user", "content": "hi"}], TOOLS)
+
+    assert fake.payload["tools"] == TOOLS
+    assert fake.payload["stream"] is True

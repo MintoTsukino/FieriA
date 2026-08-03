@@ -327,6 +327,87 @@ class OpenAICompatLLM(_ChatStreamFallbackMixin):
                            "arguments": args})
         return {"text": (message.get("content") or "").strip(), "tool_calls": calls}
 
+    # FieriA拡張: ネイティブfunction calling・ストリーミング
+    def chat_tools_stream(self, messages, tools, max_tokens=None, on_delta=None):
+        """chat_tools()のstream版。戻り値の形はchat_toolsと同じ。本文差分は
+        on_deltaへ逐次通知する（on_delta自体の例外は表示用コールバックの失敗として
+        握りつぶす——既存_call_llmと同じ「表示の失敗で会話を止めない」方針）。
+
+        OpenAI互換SSEのtool_calls断片組み立て仕様: choices[0].delta.tool_callsは
+        [{"index", "id", "function": {"name", "arguments"}}]の形で届く。id/nameは
+        最初のチャンクにだけ入り、function.argumentsは複数チャンクに割れて届く。
+        indexをキーに紐づけ、argumentsは文字列連結してから[DONE]後にまとめて
+        JSONパースする（壊れは{"__raw": ...}——chat_toolsと同じ扱い）。"""
+        payload = {
+            "model": self.model,
+            "messages": [_to_openai_msg(m) for m in messages],
+            "temperature": self.temperature,
+            "stream": True,
+            "tools": tools,
+        }
+        effective_max_tokens = max_tokens if max_tokens is not None else self.max_tokens
+        if effective_max_tokens and int(effective_max_tokens) > 0:
+            payload["max_tokens"] = int(effective_max_tokens)
+        if self.reasoning_effort:
+            payload["reasoning_effort"] = self.reasoning_effort
+        payload.update(self._extra_payload_fields())
+        text_chunks = []
+        calls_by_index = {}
+        try:
+            for raw_line in _post_sse_stream(
+                    f"{self.base_url}/chat/completions", payload, headers=self._headers()):
+                line = raw_line.strip()
+                if not line or line.startswith(":"):
+                    continue
+                if not line.startswith("data:"):
+                    continue
+                data = line[len("data:"):].strip()
+                if not data:
+                    continue
+                if data == "[DONE]":
+                    break
+                try:
+                    parsed = json.loads(data)
+                except Exception:
+                    raise RuntimeError(f"ストリームのパースに失敗: {data[:200]}")
+                choices = parsed.get("choices") or []
+                if not choices:
+                    continue
+                delta = choices[0].get("delta") or {}
+                text = delta.get("content")
+                if text:
+                    text_chunks.append(text)
+                    if on_delta:
+                        try:
+                            on_delta(text)
+                        except Exception:
+                            pass
+                for tc in (delta.get("tool_calls") or []):
+                    idx = tc.get("index", 0)
+                    entry = calls_by_index.setdefault(
+                        idx, {"id": "", "name": "", "arguments_parts": []})
+                    if tc.get("id"):
+                        entry["id"] = tc["id"]
+                    fn = tc.get("function") or {}
+                    if fn.get("name"):
+                        entry["name"] = fn["name"]
+                    if fn.get("arguments"):
+                        entry["arguments_parts"].append(fn["arguments"])
+        except Exception as e:
+            _raise_maybe_tools_unsupported(e)
+        calls = []
+        for idx in sorted(calls_by_index):
+            entry = calls_by_index[idx]
+            raw_args = "".join(entry["arguments_parts"]) or "{}"
+            try:
+                args = json.loads(raw_args)
+                if not isinstance(args, dict):
+                    args = {"__raw": raw_args}
+            except (json.JSONDecodeError, ValueError):
+                args = {"__raw": raw_args}
+            calls.append({"id": entry["id"], "name": entry["name"], "arguments": args})
+        return {"text": "".join(text_chunks).strip(), "tool_calls": calls}
+
 
 # Gemini 2.5系のthinkingBudget（内部思考に使うトークン数の上限）目安値。
 # 公式の正確な上下限はモデルごとに違うが、範囲外の値は基本クランプされる想定

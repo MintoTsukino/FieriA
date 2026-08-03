@@ -378,14 +378,24 @@ class Engine:
 
         戻り値: (reply, any_tool_call)。停止要求を検知したら_TurnStoppedを送出する。
         llm.NativeToolsUnsupportedはここで握らずそのまま呼び出し元へ伝播させる
-        （フェンスへのフォールバックはprocess_turn側の責務）。"""
+        （フェンスへのフォールバックはprocess_turn側の責務）。
+
+        FieriA拡張: ストリーミング。llmがchat_tools_streamを実装していて
+        （hasattrで判定——テストのFakeNativeLLM等は非対応のまま）on_deltaが
+        指定されているときだけstream版を使う。無ければ従来どおりchat_toolsの
+        一括呼び出し（既存のFakeNativeLLM系テストが変更なしで通り続ける）。"""
         native_tools = memory_tools.build_native_tools(self.cfg, self.soul_id)
+        use_stream = on_delta is not None and hasattr(self.llm, "chat_tools_stream")
         exchange = []
         reply = ""
         any_tool_call = False
         for _ in range(MAX_TOOL_ROUNDS + 1):
             messages = [{"role": "system", "content": system_text}] + self.messages + exchange
-            result = self.llm.chat_tools(messages, native_tools, max_tokens=None)
+            if use_stream:
+                result = self.llm.chat_tools_stream(
+                    messages, native_tools, max_tokens=None, on_delta=on_delta)
+            else:
+                result = self.llm.chat_tools(messages, native_tools, max_tokens=None)
             if self._stop_requested:
                 raise _TurnStopped()
             calls = result.get("tool_calls") or []
