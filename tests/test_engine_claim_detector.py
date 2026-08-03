@@ -71,3 +71,65 @@ def test_tool_execution_claim_is_detected():
     # 日常語は引き続き拾わない
     assert not engine_mod._CLAIM_PATTERN.search("昨日書いた小説の続きを実行に移す")
     assert not engine_mod._CLAIM_PATTERN.search("カラオケでツールボックスの歌を歌った")
+
+
+# --- ト書き検知（実機FB 2026-08-04: GPT系がツールを「演じる」） ---
+# 実機でGPT系モデルが「【ツールを使って記憶に残す】」のような隅付き括弧の
+# 地の文だけを書き、JSONを一切出さないままツールを使ったつもりになる事象。
+# DeepSeekの裸JSON（de64338）と違い本文にJSONが存在しないため、パーサ側では
+# 救えない——検知して次ターンで書き直させる（嘘発見器と同じ型）。
+
+def test_narrated_tool_use_triggers_next_turn_callout():
+    sid = soul_mod.create_soul("ト書き検知テスト", "コア")
+    # 実機ログ（souls/ニコイ/logs/2026-08-04.jsonl）の実際の応答を模した形
+    eng, llm = _engine(sid, [
+        "……大事なことだから覚えておくじぇ。\n\n【ツールを使って記憶に残す】\n\n……うん、書けたじぇ。",
+        "ふつうの返事",
+    ])
+    eng.process_turn("これ覚えて")
+    assert eng._narrated_tool_use is True
+    eng.process_turn("ありがと")
+    # マーカーは注入文にしか現れない文字列を使う（「地の文」はツール索引の
+    # 事前警告にも含まれるため、それで判定すると常に真になってしまう）
+    assert "前の応答で「【ツールを使う】」" in llm.system_texts[-1]
+
+
+def test_narrated_variants_from_real_log_are_detected():
+    """実機で観測された4パターン全部を拾えること。"""
+    import engine as engine_mod
+    for phrase in ("【ツールでタスク一覧を確認する】", "【タスクを書き込む】",
+                    "【大事な瞬間を保存する】", "【ツールを使って記憶を検索してみる】"):
+        assert engine_mod._NARRATED_TOOL_PATTERN.search(phrase), phrase
+
+
+def test_epistemics_brackets_do_not_trigger():
+    """記憶の認識論の規範（【推測】【撤回済み 日付】）は正当な用法なので拾わない。"""
+    import engine as engine_mod
+    assert not engine_mod._NARRATED_TOOL_PATTERN.search("【推測】たぶんそうだと思う")
+    assert not engine_mod._NARRATED_TOOL_PATTERN.search("【撤回済み 2026-07-01】古い方針")
+
+
+def test_narration_with_actual_tool_call_does_not_trigger():
+    """本物の呼び出しが同じターンにあれば演技扱いしない（保守側）。"""
+    sid = soul_mod.create_soul("ト書き混在テスト", "コア")
+    reply = ('【ツールを使って記憶に残す】\n'
+             '```fieria-tool\n{"tool": "save_lesson", "text": "規則"}\n```')
+    eng, llm = _engine(sid, [reply])
+    eng.process_turn("これ覚えて")
+    assert eng._narrated_tool_use is False
+
+
+def test_narration_callout_clears_after_real_call():
+    sid = soul_mod.create_soul("ト書き解消テスト", "コア")
+    replies = [
+        "【タスクを書き込む】\nこれで登録したにゃ！",
+        '今度こそ\n```fieria-tool\n{"tool": "save_lesson", "text": "規則"}\n```',
+        "ふつうの返事",
+    ]
+    eng, llm = _engine(sid, replies)
+    eng.process_turn("タスク登録して")
+    assert eng._narrated_tool_use is True
+    eng.process_turn("どこに作った？")
+    assert eng._narrated_tool_use is False
+    eng.process_turn("ありがと")
+    assert "前の応答で「【ツールを使う】」" not in llm.system_texts[-1]

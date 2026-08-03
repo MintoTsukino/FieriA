@@ -1796,3 +1796,13 @@ def test_bare_json_indented_still_counts():
     _clean, calls = memory_tools.extract_tool_calls(reply)
 
     assert [c["tool"] for c in calls] == ["save_sacred"]
+
+
+def test_tools_spec_warns_against_narrated_tool_use():
+    """ツール索引に「地の文（【ツールを使う】等）では動かない」の明記があること
+    （実機FB 2026-08-04: GPT系がツール使用を演技で済ませる。エンジン側の
+    ト書き検知（事後指摘）と対になる事前警告）。"""
+    import memory_tools
+    spec = memory_tools.build_tools_spec({})
+    assert "地の文" in spec
+    assert "動かない" in spec or "実行されない" in spec

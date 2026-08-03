@@ -23,6 +23,16 @@ _CLAIM_PATTERN = re.compile(
     r"(書き込ん|書いてお|保存し|記録し|残してお|覚えてお|追記し|更新し"
     r"|実行した|実行できた|呼び出した|呼出できた|使った|使えた)")
 
+# ト書き検知（実機FB 2026-08-04）: GPT系モデルが「【ツールを使って記憶に残す】」の
+# ような隅付き括弧の地の文（演技）だけを書き、JSONを一切出さないままツールを
+# 使ったつもりになる。API側のfunction calling作法に深く訓練されたモデルは、
+# 本文内JSON方式を長い応答の中で守り続けられず、ト書きへ退行する。
+# 括弧の中にツール系の語（ツール/保存/書き込/検索/記録/読み/追記/呼び出）が
+# あるものだけを拾う——記憶の認識論の正当な用法（【推測】【撤回済み 日付】）は
+# これらの語を含まないため誤検知しない。
+_NARRATED_TOOL_PATTERN = re.compile(
+    r"【[^】\n]*(?:ツール|保存|書き込|検索|記録|読み|追記|呼び出)[^】\n]*】")
+
 # 圧縮対象（前半）を要約させるためのシステムプロンプト。日記(wrapup.py)と違い一人称の
 # 読み物ではなく、後でLLMが会話を続けるための実務メモとして箇条書きでよい。
 COMPACT_PROMPT = """以下は長くなった会話の前半部分。後で会話を続けるために必要な情報を
@@ -96,6 +106,9 @@ class Engine:
         self._turns_since_memory_write = 0
         # 前ターンが「書いたと言いつつ実績ゼロ」だったか（嘘発見器・次ターンで指摘）
         self._unbacked_write_claim = False
+        # 前ターンが「【ツールを使う】のようなト書きだけで実呼び出しゼロ」だったか
+        # （ト書き検知・次ターンで指摘。_NARRATED_TOOL_PATTERN参照）
+        self._narrated_tool_use = False
 
     def request_stop(self):
         """考え中の応答を止めたい、というUI側からの要求を受け付ける。
@@ -296,6 +309,10 @@ class Engine:
             system_text += ("\n\n（システム: 前の応答で記憶に書いたと言ったが、実際には"
                             "ツールを呼んでいないため何も保存されていない。本当に残すなら、"
                             "今度こそ応答の中にfieria-toolブロックを書くこと）")
+        if self._narrated_tool_use:
+            system_text += ("\n\n（システム: 前の応答で「【ツールを使う】」のような"
+                            "地の文を書いたが、それではツールは動かない。演技の描写ではなく、"
+                            "応答の中に実際のfieria-toolブロックのJSONを書いたときだけ実行される）")
 
         # 圧縮判定はuserメッセージ追加前・start_len記録前に完結させる。圧縮は正当な
         # 状態変更であり、この後の例外/停止時ロールバック（start_len基準）の対象外とする。
@@ -338,6 +355,10 @@ class Engine:
         self.messages.append(user_msg)
 
         reply = ""
+        # このターン中に（壊れたJSON含め）ツール呼び出しの試みが1回でもあったか。
+        # ト書き検知の条件に使う——本物の呼び出しや壊れJSON（＝書こうとはした）が
+        # あるターンは演技扱いしない（保守側。壊れJSONは__parse_error__の差し戻しが担当）。
+        any_tool_call = False
         try:
             for i in range(MAX_TOOL_ROUNDS + 1):
                 if i > 0:
@@ -351,6 +372,7 @@ class Engine:
                     return self._stopped_result(start_len, operations,
                                                  recall_used=bool(recall_block))
                 reply, calls = memory_tools.extract_tool_calls(raw)
+                any_tool_call = any_tool_call or bool(calls)
 
                 read_results = []
                 feedback_images = []
@@ -432,6 +454,10 @@ class Engine:
         # 注入文は穏当なので実害は小さいが、日常語の「昨日書いた」等は拾わない形にする）。
         self._unbacked_write_claim = bool(
             not wrote_memory and _CLAIM_PATTERN.search(reply))
+        # ト書き検知（実機FB 2026-08-04）: ターン全体でツール呼び出しの試みがゼロ
+        # なのに「【ツールを使う】」型の地の文がある＝演じただけ。次ターンで指摘する。
+        self._narrated_tool_use = bool(
+            not any_tool_call and _NARRATED_TOOL_PATTERN.search(reply))
         for r in due_reminders_at_start:
             try:
                 soul_mod.mark_reminder_fired(self.soul_id, r["id"])
