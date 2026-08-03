@@ -20,6 +20,7 @@ import prompt as prompt_mod
 import roles as roles_mod
 import search as search_mod
 import soul as soul_mod
+import tasks_store
 import tts as tts_mod
 import wrapup as wrapup_mod
 from engine import Engine
@@ -1077,6 +1078,89 @@ class Bridge:
         except ValueError as e:
             return {"ok": False, "error": str(e)}
         return {"ok": True, "error": ""}
+
+    # --- タスクタブ ---
+    def _tasks_blocked(self):
+        """タスクの変異操作を弾くべき状態ならエラーメッセージを、良ければNoneを返す。
+        判定はcompact_contextと同じ（会話中・インポート中・定期ジョブ実行中）。
+        読み取り（get_tasks）はゲートしない——ブロックが要るのは
+        『AIのupdate_tasks全文置換とGUI書き込みが同じファイルを取り合う』瞬間だけ。"""
+        with self._busy_lock:
+            if self._busy_turns > 0 or self._importing:
+                return "会話・インポートの処理中はタスクを操作できない"
+        if self._scheduler.is_running_job():
+            return "定期処理の実行中はタスクを操作できない"
+        return None
+
+    def get_tasks(self):
+        sid = self._cfg.get("active_soul")
+        if not sid:
+            return {"ok": False, "now": [], "future": [], "done_today": []}
+        data = tasks_store.parse_tasks(soul_mod.read_file(sid, "tasks.md"))
+        today = datetime.date.today().isoformat()
+        done = tasks_store.parse_done(soul_mod.read_file(sid, "tasks_done.md"))
+        return {"ok": True, "now": data["now"], "future": data["future"],
+                "done_today": [d for d in done if d["date"] == today]}
+
+    def _task_mutate(self, op):
+        """変異系ブリッジの共通枠: ゲート→レガシー移行→op→書き込み。
+        opは(md, done_md, today)を受けて(新md, 新done_md)またはNone（照合失敗）を返す。"""
+        sid = self._cfg.get("active_soul")
+        if not sid:
+            return {"ok": False, "error": "SOULが選ばれていない"}
+        blocked = self._tasks_blocked()
+        if blocked:
+            return {"ok": False, "error": blocked}
+        md = soul_mod.read_file(sid, "tasks.md")
+        done_md = soul_mod.read_file(sid, "tasks_done.md")
+        today = datetime.date.today().isoformat()
+        md, done_md, moved = tasks_store.migrate_legacy(md, done_md, today)
+        result = op(md, done_md, today)
+        if result is None:
+            # 照合失敗でも、済ませたレガシー移行だけは書き込んで返す（移行は冪等）
+            if moved:
+                soul_mod.write_file(sid, "tasks.md", md)
+                soul_mod.write_file(sid, "tasks_done.md", done_md)
+            return {"ok": False, "error": "リストが更新されていた。表示を読み直す"}
+        new_md, new_done = result
+        soul_mod.write_file(sid, "tasks.md", new_md)
+        soul_mod.write_file(sid, "tasks_done.md", new_done)
+        return {"ok": True, "error": ""}
+
+    def task_add(self, section, text, due, category):
+        text = (text or "").strip()
+        if not text:
+            return {"ok": False, "error": "内容が空"}
+        if section not in ("now", "future"):
+            return {"ok": False, "error": "不正なセクション"}
+        due = (due or "").strip()
+        if due and not tasks_store._DATE_RE.match(due):
+            # dueはUI側で<input type="date">を使うためYYYY-MM-DD形式が保証されるが、
+            # JS由来の値というシステム境界なので防御として検証する
+            return {"ok": False, "error": "期限はYYYY-MM-DD形式"}
+        return self._task_mutate(
+            lambda md, dm, _t: (tasks_store.add_task(md, section, text,
+                                                     due or None,
+                                                     (category or "").strip() or None), dm))
+
+    def task_move(self, section, index, text):
+        return self._task_mutate(
+            lambda md, dm, _t: (lambda r: None if r is None else (r, dm))(
+                tasks_store.move_task(md, section, int(index), text)))
+
+    def task_delete(self, section, index, text):
+        return self._task_mutate(
+            lambda md, dm, _t: (lambda r: None if r is None else (r, dm))(
+                tasks_store.delete_task(md, section, int(index), text)))
+
+    def task_complete(self, section, index, text):
+        return self._task_mutate(
+            lambda md, dm, t: tasks_store.complete_task(md, dm, section,
+                                                        int(index), text, t))
+
+    def task_restore(self, text):
+        return self._task_mutate(
+            lambda md, dm, t: tasks_store.restore_done(md, dm, text, t))
 
     def get_latest_diary(self):
         """右パネル「日記」用。直近の日次日記を{"date","text","note"}で返す。1本も無ければ

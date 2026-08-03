@@ -2800,3 +2800,119 @@ def test_save_settings_accepts_fence_and_auto():
     provs = b._cfg["llm"]["providers"]
     assert provs["d"]["tool_mode"] == "fence"
     assert "tool_mode" not in provs["e"]   # autoは既定なので保存しない
+
+
+# --- タスクタブ（tasks.md/tasks_done.mdのGUI操作・2026-08-04追加）---
+
+def _task_bridge():
+    import gui
+    import soul
+    b = gui.Bridge()
+    sid = soul.create_soul("タスクタブテスト")
+    b._cfg["active_soul"] = sid
+    return b, sid
+
+
+def test_get_tasks_parses_soul_file():
+    """tasks.mdの正規形がnow/futureに分かれて返る"""
+    import soul
+    b, sid = _task_bridge()
+    soul.write_file(sid, "tasks.md",
+                    "# tasks\n\n## いまやる\n- A\n\n## これから\n- B ｜2026-08-23\n")
+    r = b.get_tasks()
+    assert r["ok"] is True
+    assert [t["text"] for t in r["now"]] == ["A"]
+    assert r["future"][0]["due"] == "2026-08-23"
+
+
+def test_get_tasks_done_today_filters_by_date():
+    """tasks_done.mdのうち完了日==今日の行だけがdone_todayに出る"""
+    import datetime
+    import soul
+    b, sid = _task_bridge()
+    today = datetime.date.today().isoformat()
+    soul.write_file(sid, "tasks_done.md",
+                    "# tasks done\n- ✓ 今日の分 ｜完了 " + today + "\n"
+                    "- ✓ 昔の分 ｜完了 2026-08-01\n")
+    r = b.get_tasks()
+    assert [d["text"] for d in r["done_today"]] == ["今日の分"]
+
+
+def test_task_add_writes_canonical_form():
+    """task_addの後、tasks.mdが正規形（## いまやる見出しあり）になっている"""
+    import soul
+    b, sid = _task_bridge()
+    r = b.task_add("now", "新タスク", "2026-08-20", "執筆")
+    assert r["ok"] is True
+    body = soul.read_file(sid, "tasks.md")
+    assert "## いまやる" in body
+    assert "- 新タスク ｜2026-08-20 ｜執筆" in body
+
+
+def test_task_add_rejects_bad_due():
+    """dueはシステム境界（JS由来）なのでYYYY-MM-DD以外の非空値を弾く"""
+    b, _sid = _task_bridge()
+    assert b.task_add("now", "新タスク", "8/20", "")["ok"] is False
+
+
+def test_task_complete_moves_line_to_done():
+    """完了でtasks.mdから行が消え、tasks_done.mdに✓・完了日付きで残る
+    （移動であって削除でない）"""
+    import soul
+    b, sid = _task_bridge()
+    soul.write_file(sid, "tasks.md", "## いまやる\n- ゲラ戻し ｜執筆\n")
+    r = b.task_complete("now", 0, "ゲラ戻し")
+    assert r["ok"] is True
+    assert "ゲラ戻し" not in soul.read_file(sid, "tasks.md")
+    done = soul.read_file(sid, "tasks_done.md")
+    assert "✓ ゲラ戻し" in done and "完了 " in done
+
+
+def test_task_mutation_blocked_while_busy():
+    """会話中（_busy_turns>0）は変異系がok:Falseで弾かれ、ファイルも変わらない。
+    読み取り（get_tasks）は通る"""
+    import soul
+    b, sid = _task_bridge()
+    soul.write_file(sid, "tasks.md", "## いまやる\n- A\n")
+    b._busy_turns = 1
+    assert b.task_complete("now", 0, "A")["ok"] is False
+    assert "- A" in soul.read_file(sid, "tasks.md")
+    assert b.get_tasks()["ok"] is True
+
+
+def test_task_mutation_blocked_while_job_running(monkeypatch):
+    """定期ジョブ実行中も変異系は弾かれる"""
+    b, _sid = _task_bridge()
+    monkeypatch.setattr(b._scheduler, "is_running_job", lambda: True)
+    assert b.task_add("now", "X", "", "")["ok"] is False
+
+
+def test_task_move_index_mismatch_reloads():
+    """indexと実体textの不一致はok:False（AI書き換えとの競合ガード）でファイル無変更"""
+    import soul
+    b, sid = _task_bridge()
+    soul.write_file(sid, "tasks.md", "## いまやる\n- A\n")
+    before = soul.read_file(sid, "tasks.md")
+    assert b.task_move("now", 0, "別のタスク")["ok"] is False
+    assert soul.read_file(sid, "tasks.md") == before
+
+
+def test_task_mutation_migrates_legacy_done():
+    """✓済行が残った旧tasks.mdに対する最初の変異操作で、✓行がtasks_done.mdへ移る"""
+    import soul
+    b, sid = _task_bridge()
+    soul.write_file(sid, "tasks.md", "- 原稿（✓済 2026-07-20）\n- 買い物\n")
+    assert b.task_add("now", "新タスク", "", "")["ok"] is True
+    assert "✓" not in soul.read_file(sid, "tasks.md")
+    assert "原稿（✓済 2026-07-20）" in soul.read_file(sid, "tasks_done.md")
+
+
+def test_task_restore_returns_to_now():
+    """今日完了した行をtask_restoreでnowへ戻せる。昨日の行は戻せない"""
+    import soul
+    b, sid = _task_bridge()
+    soul.write_file(sid, "tasks.md", "## いまやる\n- ゲラ戻し\n")
+    b.task_complete("now", 0, "ゲラ戻し")
+    assert b.task_restore("ゲラ戻し")["ok"] is True
+    assert "- ゲラ戻し" in soul.read_file(sid, "tasks.md")
+    assert b.task_restore("存在しない行")["ok"] is False
