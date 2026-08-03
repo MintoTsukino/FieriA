@@ -108,11 +108,32 @@ class NativeToolsUnsupported(RuntimeError):
     tools/functionを含むか」方式（HTTPステータスだけでは区別できないため）。"""
 
 
+def _enrich_http_error(e):
+    """urllib.error.HTTPErrorの本文を読み、'HTTP <code>: <本文>' のRuntimeErrorへ変換する。
+    実弾E2E（2026-08-04）で発覚: Ollamaのtools非対応はHTTP 500で理由が本文にしか
+    入らないが、_post_jsonはHTTPErrorを素通しするため文字列が
+    「HTTP Error 500: Internal Server Error」だけになり、
+    _raise_maybe_tools_unsupportedの判定（本文のtools/function語）に届かず
+    フォールバックが構造的に発動できなかった。_post_sse（llm.py:56）と同じ
+    本文読み出しをchat_tools系の経路にだけ適用する（既存chat()/chat_stream()の
+    エラーメッセージ形は変えない）。"""
+    if isinstance(e, urllib.error.HTTPError):
+        detail = ""
+        try:
+            detail = e.read().decode("utf-8", errors="replace")[:300]
+        except Exception:
+            pass
+        return RuntimeError(f"HTTP {e.code}: {detail or e.reason}")
+    return e
+
+
 def _raise_maybe_tools_unsupported(e):
     msg = str(e).lower()
     if "tool" in msg or "function" in msg:
         raise NativeToolsUnsupported(str(e)) from e
-    raise
+    # 渡されたeを投げる（bare raiseだと呼び出し元except節の「元の例外」が再送出され、
+    # _enrich_http_errorで本文を足した別オブジェクトを渡しても捨てられてしまう）。
+    raise e
 
 
 class _ChatStreamFallbackMixin:
@@ -308,7 +329,7 @@ class OpenAICompatLLM(_ChatStreamFallbackMixin):
             body = _post_json(f"{self.base_url}/chat/completions", payload,
                                headers=self._headers())
         except Exception as e:
-            _raise_maybe_tools_unsupported(e)
+            _raise_maybe_tools_unsupported(_enrich_http_error(e))
         choices = body.get("choices")
         if not choices:
             raise RuntimeError(f"LLM応答が空: {json.dumps(body, ensure_ascii=False)[:200]}")
@@ -727,6 +748,27 @@ def _extract_sse_final_response(raw_text):
     return latest
 
 
+def _extract_sse_function_call_items(raw_text):
+    """SSEイベント列からresponse.output_item.doneのfunction_callアイテムを順に集める。
+    実際のCodexバックエンドは最終response.completedのoutputを空で返すことがあり
+    （chat()の「最終イベントのoutputが空になりうる」と同じ）、function_callの実体は
+    このイベントにしか現れない（実弾E2E 2026-08-04で観察・CodexOAuthLLM.chat_tools参照）。"""
+    items = []
+    for _event_name, data in _iter_sse_events(raw_text):
+        try:
+            parsed = json.loads(data)
+        except Exception:
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        if parsed.get("type") != "response.output_item.done":
+            continue
+        item = parsed.get("item")
+        if isinstance(item, dict) and item.get("type") == "function_call":
+            items.append(item)
+    return items
+
+
 def _responses_output_text(response_obj):
     """Responses APIのresponseオブジェクトからoutput_textを連結して返す"""
     texts = []
@@ -1007,10 +1049,21 @@ class CodexOAuthLLM(_ChatStreamFallbackMixin):
             )
 
         text = _extract_sse_delta_text(raw) or _responses_output_text(response_obj)
+        # function_callアイテムは2箇所から拾う（実弾E2E 2026-08-04で発覚）:
+        # 実際のCodexバックエンドは最終response.completedのoutputを空配列で返し、
+        # 実体はresponse.output_item.doneイベントのitem側にだけ入る（既存chat()の
+        # 「最終イベントのoutputが空になりうる」と同じ現象のtools版）。最終outputの
+        # パースもフォールバックとして残し、両方に出た場合はcall_idで重複排除する。
+        items = _extract_sse_function_call_items(raw)
+        items += [item for item in (response_obj.get("output", []) or [])
+                   if isinstance(item, dict) and item.get("type") == "function_call"]
         calls = []
-        for item in response_obj.get("output", []) or []:
-            if not isinstance(item, dict) or item.get("type") != "function_call":
+        seen_ids = set()
+        for item in items:
+            call_id = item.get("call_id") or ""
+            if call_id and call_id in seen_ids:
                 continue
+            seen_ids.add(call_id)
             raw_args = item.get("arguments") or "{}"
             try:
                 args = json.loads(raw_args)
@@ -1018,7 +1071,7 @@ class CodexOAuthLLM(_ChatStreamFallbackMixin):
                     args = {"__raw": raw_args}
             except (json.JSONDecodeError, ValueError):
                 args = {"__raw": raw_args}
-            calls.append({"id": item.get("call_id") or "", "name": item.get("name") or "",
+            calls.append({"id": call_id, "name": item.get("name") or "",
                            "arguments": args})
         return {"text": text, "tool_calls": calls}
 

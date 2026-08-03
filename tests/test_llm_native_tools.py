@@ -368,3 +368,93 @@ def test_codex_chat_tools_tools_rejection_raises_typed_error(monkeypatch):
         assert False, "例外が出るはず"
     except llm.NativeToolsUnsupported:
         pass
+
+
+# --- 実弾E2Eで発覚した2件の修正（2026-08-04） ---
+
+def test_codex_chat_tools_parses_function_call_from_output_item_done(monkeypatch):
+    """実弾で観察: response.completedのoutputが空配列で、function_callの実体は
+    response.output_item.doneイベント側に入る（既存chat()のコメント「最終イベントの
+    outputが空になりうる」と同じ現象のtools版）。output_item.doneからも拾えること。"""
+    _fake_codex_login(monkeypatch)
+
+    def fake_post_sse(url, payload, headers=None, timeout=120):
+        return (
+            "data: " + json.dumps({"type": "response.output_item.added", "item": {}}) + "\n\n"
+            "data: " + json.dumps({
+                "type": "response.output_item.done",
+                "item": {"type": "function_call", "call_id": "call_9",
+                          "name": "write_wiki",
+                          "arguments": '{"topic": "T", "content": "C"}'}}) + "\n\n"
+            "data: " + json.dumps({"type": "response.completed",
+                                     "response": {"status": "completed", "output": []}}) + "\n\n"
+        )
+
+    monkeypatch.setattr(llm, "_post_sse", fake_post_sse)
+
+    result = _mk_codex().chat_tools([{"role": "user", "content": "hi"}], TOOLS)
+
+    assert result["tool_calls"] == [
+        {"id": "call_9", "name": "write_wiki",
+         "arguments": {"topic": "T", "content": "C"}}]
+
+
+def test_codex_chat_tools_no_duplicate_when_call_in_both_places(monkeypatch):
+    """output_item.doneと最終outputの両方に同じcall_idが出た場合は1件に重複排除。"""
+    _fake_codex_login(monkeypatch)
+    item = {"type": "function_call", "call_id": "call_1", "name": "write_wiki",
+            "arguments": '{"topic": "T"}'}
+
+    def fake_post_sse(url, payload, headers=None, timeout=120):
+        return (
+            "data: " + json.dumps({"type": "response.output_item.done", "item": dict(item)}) + "\n\n"
+            "data: " + json.dumps({"type": "response.completed",
+                                     "response": {"status": "completed",
+                                                   "output": [dict(item)]}}) + "\n\n"
+        )
+
+    monkeypatch.setattr(llm, "_post_sse", fake_post_sse)
+
+    result = _mk_codex().chat_tools([{"role": "user", "content": "hi"}], TOOLS)
+
+    assert len(result["tool_calls"]) == 1
+
+
+def _http_error(code, body):
+    import io
+    import urllib.error
+    return urllib.error.HTTPError(
+        url="http://x", code=code, msg="msg", hdrs=None,
+        fp=io.BytesIO(body.encode("utf-8")))
+
+
+def test_chat_tools_http_error_body_reaches_unsupported_detection(monkeypatch):
+    """実弾で観察: Ollamaのtools非対応はHTTP 500で、理由はエラー本文にしか無い。
+    _post_jsonが素通しするurllib.error.HTTPErrorの本文を読んでから判定に渡すこと
+    （読まないと「HTTP Error 500: Internal Server Error」だけになり、
+    フォールバック検知が構造的に発動できない）。"""
+    def fake_post(url, payload, headers=None, timeout=120):
+        raise _http_error(500, '{"error": "model does not support tools"}')
+
+    monkeypatch.setattr(llm, "_post_json", fake_post)
+
+    try:
+        _mk().chat_tools([{"role": "user", "content": "hi"}], TOOLS)
+        assert False, "例外が出るはず"
+    except llm.NativeToolsUnsupported:
+        pass
+
+
+def test_chat_tools_http_error_unrelated_body_stays_runtime_error(monkeypatch):
+    def fake_post(url, payload, headers=None, timeout=120):
+        raise _http_error(500, '{"error": "internal server exploded"}')
+
+    monkeypatch.setattr(llm, "_post_json", fake_post)
+
+    try:
+        _mk().chat_tools([{"role": "user", "content": "hi"}], TOOLS)
+        assert False, "例外が出るはず"
+    except llm.NativeToolsUnsupported:
+        assert False, "toolsと無関係の本文を誤分類しない"
+    except RuntimeError as e:
+        assert "exploded" in str(e)  # 本文がエラーメッセージへ届いている
