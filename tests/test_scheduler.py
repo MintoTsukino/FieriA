@@ -326,6 +326,18 @@ def test_write_daily_chronicle_still_uses_today():
 
 # --- Scheduler.tick: 発火判定 ---
 
+def _drain(sch, day, hour=23):
+    """その日に走るジョブが尽きるまでtickを回す（tickは1回1ジョブ）。
+    hour=23は「その日の全ジョブの実行時刻を過ぎた状態」＝時間割の影響を受けずに
+    従来どおり『日付が変わったら一通り走る』を検証するため。走ったjob_idを返す。"""
+    ran = []
+    for _ in range(len(__import__("scheduler").JOBS) + 1):
+        job_id = sch.tick(now=datetime.datetime.fromisoformat("%sT%02d:30:00" % (day, hour)))
+        if not job_id:
+            break
+        ran.append(job_id)
+    return ran
+
 def test_tick_first_call_triggers_catch_up():
     import soul, scheduler
     sid = soul.create_soul("tick初回テスト")
@@ -335,7 +347,7 @@ def test_tick_first_call_triggers_catch_up():
     sch = scheduler.Scheduler()
     sch._get_context = lambda: (_cfg(), fake, sid)
 
-    sch.tick(today="2026-01-01")
+    _drain(sch, "2026-01-01")
 
     assert sch.last_run_info["last_run"] is not None
     assert sch.last_run_info["written"] == [old_day]
@@ -350,11 +362,11 @@ def test_tick_same_day_second_call_does_not_trigger_catch_up():
     sch = scheduler.Scheduler()
     sch._get_context = lambda: (_cfg(), fake, sid)
 
-    sch.tick(today="2026-01-01")
+    _drain(sch, "2026-01-01")
     first_info = sch.last_run_info
     # 2回目呼び出し前にさらにログを増やしても、同日なら発火しないことを見るため
     # わざと同じ日付を渡す
-    sch.tick(today="2026-01-01")
+    _drain(sch, "2026-01-01")
 
     assert sch.last_run_info is first_info  # last_run_infoが更新されていない（同一オブジェクトのまま）
 
@@ -371,9 +383,9 @@ def test_tick_triggers_again_when_date_changes():
     sch = scheduler.Scheduler()
     sch._get_context = lambda: (_cfg(), fake, sid)
 
-    sch.tick(today="2026-01-01")
+    _drain(sch, "2026-01-01")
     first_info = sch.last_run_info
-    sch.tick(today="2026-01-02")
+    _drain(sch, "2026-01-02")
 
     assert sch.last_run_info is not first_info
 
@@ -383,7 +395,7 @@ def test_tick_does_nothing_when_no_active_soul():
     sch = scheduler.Scheduler()
     sch._get_context = lambda: (_cfg(), FakeLLM(), None)
 
-    sch.tick(today="2026-01-01")
+    _drain(sch, "2026-01-01")
 
     assert sch.last_run_info == {"last_run": None, "written": []}
 
@@ -393,7 +405,7 @@ def test_tick_does_nothing_when_no_llm():
     sch = scheduler.Scheduler()
     sch._get_context = lambda: (_cfg(), None, "some-soul")
 
-    sch.tick(today="2026-01-01")
+    _drain(sch, "2026-01-01")
 
     assert sch.last_run_info == {"last_run": None, "written": []}
 
@@ -517,7 +529,7 @@ def test_tick_skips_weekly_digest_when_disabled():
     sch = scheduler.Scheduler()
     sch._get_context = lambda: (cfg, fake, sid)
 
-    sch.tick(today="2026-01-01")
+    _drain(sch, "2026-01-01")
 
     assert soul.read_file(sid, f"chronicle/weekly/{week}.md") == ""
     assert "weekly_digest" not in sch.last_run_info["jobs"]
@@ -535,7 +547,7 @@ def test_tick_runs_weekly_digest_when_enabled():
     sch = scheduler.Scheduler()
     sch._get_context = lambda: (cfg, fake, sid)
 
-    sch.tick(today="2026-01-01")
+    _drain(sch, "2026-01-01")
 
     assert soul.read_file(sid, f"chronicle/weekly/{week}.md") != ""
     assert sch.last_run_info["jobs"]["weekly_digest"] == [week]
@@ -660,7 +672,7 @@ def test_tick_skips_monthly_digest_when_disabled():
     sch = scheduler.Scheduler()
     sch._get_context = lambda: (cfg, fake, sid)
 
-    sch.tick(today="2026-01-01")
+    _drain(sch, "2026-01-01")
 
     assert soul.read_file(sid, f"chronicle/monthly/{month}.md") == ""
     assert "monthly_digest" not in sch.last_run_info["jobs"]
@@ -678,7 +690,7 @@ def test_tick_runs_monthly_digest_when_enabled():
     sch = scheduler.Scheduler()
     sch._get_context = lambda: (cfg, fake, sid)
 
-    sch.tick(today="2026-01-01")
+    _drain(sch, "2026-01-01")
 
     assert soul.read_file(sid, f"chronicle/monthly/{month}.md") != ""
     assert sch.last_run_info["jobs"]["monthly_digest"] == [month]
@@ -744,7 +756,7 @@ def test_tick_runs_index_maintenance_when_over_limit_and_enabled():
     sch = scheduler.Scheduler()
     sch._get_context = lambda: (cfg, fake, sid)
 
-    sch.tick(today="2026-01-01")
+    _drain(sch, "2026-01-01")
 
     assert sch.last_run_info["jobs"]["index_maintenance"] is True
     assert "整理済み" in soul.read_file(sid, "MEMORY.md")
@@ -763,7 +775,7 @@ def test_tick_skips_index_maintenance_when_disabled():
     sch = scheduler.Scheduler()
     sch._get_context = lambda: (cfg, fake, sid)
 
-    sch.tick(today="2026-01-01")
+    _drain(sch, "2026-01-01")
 
     assert "index_maintenance" not in sch.last_run_info["jobs"]
     assert soul.read_file(sid, "MEMORY.md") == original
@@ -784,9 +796,9 @@ def test_tick_second_call_same_day_does_not_refire_index_maintenance():
     sch = scheduler.Scheduler()
     sch._get_context = lambda: (cfg, fake, sid)
 
-    sch.tick(today="2026-01-01")
+    _drain(sch, "2026-01-01")
     first_info = sch.last_run_info
-    sch.tick(today="2026-01-01")
+    _drain(sch, "2026-01-01")
 
     assert sch.last_run_info is first_info  # 同日2回目は何も起きていない
 
@@ -796,7 +808,7 @@ def test_tick_without_get_context_does_nothing():
     import scheduler
     sch = scheduler.Scheduler()
 
-    sch.tick(today="2026-01-01")  # 例外を投げない
+    _drain(sch, "2026-01-01")  # 例外を投げない
 
     assert sch.last_run_info == {"last_run": None, "written": []}
 
@@ -905,7 +917,7 @@ def test_tick_runs_self_reflection_when_enabled():
     sch = scheduler.Scheduler()
     sch._get_context = lambda: (cfg, fake, sid)
 
-    sch.tick(today="2026-01-01")
+    _drain(sch, "2026-01-01")
 
     assert sch.last_run_info["jobs"]["self_reflection"] == [week]
 
@@ -921,7 +933,7 @@ def test_tick_skips_self_reflection_when_disabled():
     sch = scheduler.Scheduler()
     sch._get_context = lambda: (cfg, fake, sid)
 
-    sch.tick(today="2026-01-01")
+    _drain(sch, "2026-01-01")
 
     assert "self_reflection" not in sch.last_run_info["jobs"]
     assert soul.read_file(sid, "identity_history/reflections.log") == ""
@@ -1001,7 +1013,7 @@ def test_tick_runs_wiki_gardening_when_enabled():
     sch = scheduler.Scheduler()
     sch._get_context = lambda: (cfg, fake, sid)
 
-    sch.tick(today="2026-01-01")
+    _drain(sch, "2026-01-01")
 
     today = datetime.date.today()
     last_month = (today.replace(day=1) - datetime.timedelta(days=1)).isoformat()[:7]
@@ -1019,7 +1031,7 @@ def test_tick_skips_wiki_gardening_when_disabled():
     sch = scheduler.Scheduler()
     sch._get_context = lambda: (cfg, fake, sid)
 
-    sch.tick(today="2026-01-01")
+    _drain(sch, "2026-01-01")
 
     assert "wiki_gardening" not in sch.last_run_info["jobs"]
     # OFFなのでマーカーも書かれていない
@@ -1052,10 +1064,10 @@ def test_is_running_job_true_during_job_execution_and_false_after():
         return []
 
     original_jobs = scheduler.JOBS
-    scheduler.JOBS = [{"id": "daily_chronicle", "name": "probe",
+    scheduler.JOBS = [{"id": "daily_chronicle", "hour": 0, "name": "probe",
                         "description": "probe", "run": probe_job}]
     try:
-        sch.tick(today="2026-01-01")
+        _drain(sch, "2026-01-01")
     finally:
         scheduler.JOBS = original_jobs
 
@@ -1076,11 +1088,11 @@ def test_is_running_job_resets_to_false_even_if_job_raises():
         raise RuntimeError("想定外の例外")
 
     original_jobs = scheduler.JOBS
-    scheduler.JOBS = [{"id": "daily_chronicle", "name": "broken",
+    scheduler.JOBS = [{"id": "daily_chronicle", "hour": 0, "name": "broken",
                         "description": "broken", "run": broken_job}]
     try:
         try:
-            sch.tick(today="2026-01-01")
+            _drain(sch, "2026-01-01")
         except RuntimeError:
             pass
     finally:
@@ -1105,6 +1117,126 @@ def test_tick_wiki_gardening_default_off_when_key_missing():
     sch = scheduler.Scheduler()
     sch._get_context = lambda: (cfg, fake, sid)
 
-    sch.tick(today="2026-01-01")
+    _drain(sch, "2026-01-01")
 
     assert "wiki_gardening" not in sch.last_run_info["jobs"]
+
+
+# --- Scheduler.tick: 時間割・1tick1ジョブ・会話中の待避 2026-08-03 ---
+
+def _dt(day="2026-01-01", hour=23):
+    return datetime.datetime.fromisoformat("%sT%02d:00:00" % (day, hour))
+
+
+def _fresh_sch(cfg, llm, sid, is_busy=None):
+    import scheduler
+    sch = scheduler.Scheduler()
+    sch._get_context = lambda: (cfg, llm, sid)
+    sch._is_busy = is_busy
+    return sch
+
+
+def _soul_with_two_pending_jobs(name):
+    """日次（未書きの過去日）と週次（未書きの完了週）の両方が溜まったSOULを作る。"""
+    import soul
+    sid = soul.create_soul(name)
+    day = _dates_ago(1)
+    soul.append_file(sid, os.path.join("logs", f"{day}.jsonl"),
+                      '{"who": "user", "text": "きのうの話じょ"}\n')
+    past_monday = _monday_of_week_ago(2)
+    soul.write_file(sid, f"chronicle/{past_monday.isoformat()}.md", "# 過去週の日記\n")
+    return sid
+
+
+def test_tick_runs_only_one_job_per_call():
+    sid = _soul_with_two_pending_jobs("1tick1ジョブテスト")
+    sch = _fresh_sch(_cfg(), FakeLLM(), sid)
+
+    first = sch.tick(now=_dt(hour=23))
+    second = sch.tick(now=_dt(hour=23))
+
+    assert first == "daily_chronicle"
+    assert second == "weekly_digest"
+
+
+def test_tick_skips_job_before_its_hour():
+    """既定の時間割: 日次0時・週次4時。1時では日次だけが対象になる。"""
+    sid = _soul_with_two_pending_jobs("時刻ゲートテスト")
+    sch = _fresh_sch(_cfg(), FakeLLM(), sid)
+
+    ran = [sch.tick(now=_dt(hour=1)), sch.tick(now=_dt(hour=1))]
+
+    assert ran == ["daily_chronicle", None]
+
+
+def test_tick_runs_job_when_its_hour_arrives_later_same_day():
+    sid = _soul_with_two_pending_jobs("時刻到来テスト")
+    sch = _fresh_sch(_cfg(), FakeLLM(), sid)
+    sch.tick(now=_dt(hour=1))
+
+    assert sch.tick(now=_dt(hour=1)) is None
+    assert sch.tick(now=_dt(hour=5)) == "weekly_digest"
+
+
+def test_tick_respects_hour_override_from_config():
+    sid = _soul_with_two_pending_jobs("時間割上書きテスト")
+    cfg = _cfg()
+    cfg["scheduled_job_hours"] = {"weekly_digest": 1}
+    sch = _fresh_sch(cfg, FakeLLM(), sid)
+
+    ran = [sch.tick(now=_dt(hour=1)), sch.tick(now=_dt(hour=1))]
+
+    assert ran == ["daily_chronicle", "weekly_digest"]
+
+
+def test_tick_runs_missed_job_when_app_starts_after_the_hour():
+    """自己修復の維持: 0時にアプリが消えていて昼に起動しても、その日ぶんは走る
+    （時刻は「これより前には走らない」下限であって、正時ぴったりの引き金ではない）。"""
+    sid = _soul_with_two_pending_jobs("取りこぼし防止テスト")
+    sch = _fresh_sch(_cfg(), FakeLLM(), sid)
+
+    assert sch.tick(now=_dt(hour=15)) == "daily_chronicle"
+
+
+def test_tick_runs_each_job_once_per_day():
+    sid = _soul_with_two_pending_jobs("1日1回テスト")
+    sch = _fresh_sch(_cfg(), FakeLLM(), sid)
+    while sch.tick(now=_dt(hour=23)):
+        pass
+
+    assert sch.tick(now=_dt(hour=23)) is None
+    assert sch.tick(now=_dt(day="2026-01-02", hour=23)) == "daily_chronicle"
+
+
+def test_tick_does_not_start_job_while_conversation_busy():
+    """会話中はジョブを始めない（人間優先）。ジョブは状態差分で自己修復するので
+    次のtickへ回しても失われない。"""
+    sid = _soul_with_two_pending_jobs("会話優先テスト")
+    fake = FakeLLM()
+    sch = _fresh_sch(_cfg(), fake, sid, is_busy=lambda: True)
+
+    assert sch.tick(now=_dt(hour=23)) is None
+    assert fake.last_system is None  # LLMが呼ばれていない
+
+
+def test_tick_runs_after_conversation_ends():
+    sid = _soul_with_two_pending_jobs("会話終了後テスト")
+    busy = {"v": True}
+    sch = _fresh_sch(_cfg(), FakeLLM(), sid, is_busy=lambda: busy["v"])
+    assert sch.tick(now=_dt(hour=23)) is None
+
+    busy["v"] = False
+
+    assert sch.tick(now=_dt(hour=23)) == "daily_chronicle"
+
+
+def test_running_job_name_is_empty_when_idle():
+    sch = _fresh_sch(_cfg(), FakeLLM(), None)
+    assert sch.running_job_name() == ""
+
+
+def test_every_job_has_a_default_hour():
+    import scheduler
+    for job in scheduler.JOBS:
+        assert isinstance(job["hour"], int)
+        assert 0 <= job["hour"] <= 23

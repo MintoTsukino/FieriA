@@ -308,44 +308,66 @@ def run_index_maintenance(cfg, llm, soul_id):
 # （gui.py get_scheduled_jobs参照）。tickはこの順（daily→weekly→monthly）で実行する。
 # 週次の素材は日次日記、月次の素材は週次（無ければ日次）なので、同じtick内で
 # 上流のジョブを先に走らせておく必要がある。
+# 各ジョブの既定の実行時刻（0-23時）。configの scheduled_job_hours で上書きできる。
+# 「この時刻より前には走らない」下限であって、正時ぴったりの引き金ではない
+# （その時刻にアプリが消えていても、次に起動したtickでその日ぶんが走る＝自己修復）。
+# 全部を0時に集中させると、日をまたいだ瞬間にLLM呼び出しが束で走って会話を
+# 待たせるため、日記だけ0時に置き、他は深夜〜早朝へ1時間ずつ散らしてある。
 JOBS = [
     {
         "id": "daily_chronicle",
+        "hour": 0,
         "name": "日次日記",
         "description": "日付が変わったら前日までの未書き日記を書き、日記の後にも会話が続いた日には続きを追記する（アプリ起動中のみ）",
         "run": lambda cfg, llm, soul_id: catch_up(cfg, llm, soul_id),
     },
     {
         "id": "weekly_digest",
+        "hour": 4,
         "name": "週次あらすじ",
         "description": "完了した週の日次日記から週次あらすじをまとめる（アプリ起動中のみ）",
         "run": lambda cfg, llm, soul_id: catch_up_weekly(cfg, llm, soul_id),
     },
     {
         "id": "monthly_digest",
+        "hour": 5,
         "name": "月次あらすじ",
         "description": "完了した月の週次あらすじ（無ければ日次日記）から月次あらすじをまとめる（アプリ起動中のみ）",
         "run": lambda cfg, llm, soul_id: catch_up_monthly(cfg, llm, soul_id),
     },
     {
         "id": "index_maintenance",
+        "hour": 3,
         "name": "索引の整理",
         "description": "記憶の索引が長くなりすぎたら整理して書き直す（アプリ起動中のみ）",
         "run": lambda cfg, llm, soul_id: run_index_maintenance(cfg, llm, soul_id),
     },
     {
         "id": "self_reflection",
+        "hour": 6,
         "name": "週次の内省",
         "description": "週に一度、自分の核と話し方を読み返して育てる（本人がidentityを書き換えます）",
         "run": lambda cfg, llm, soul_id: catch_up_self_reflection(cfg, llm, soul_id),
     },
     {
         "id": "wiki_gardening",
+        "hour": 7,
         "name": "wikiの庭仕事",
         "description": "月に一度、長くなったwikiページをLLMが整理する（本人がwikiを書き換えます）",
         "run": lambda cfg, llm, soul_id: catch_up_wiki_gardening(cfg, llm, soul_id),
     },
 ]
+
+
+def _job_hour(job, hours_cfg):
+    """ジョブの実効実行時刻。configのscheduled_job_hoursに0-23の整数があればそれ、
+    無ければ・壊れていればJOBSの既定値。"""
+    raw = (hours_cfg or {}).get(job["id"])
+    try:
+        hour = int(raw)
+    except (TypeError, ValueError):
+        return job["hour"]
+    return hour if 0 <= hour <= 23 else job["hour"]
 
 
 class Scheduler:
@@ -355,10 +377,18 @@ class Scheduler:
 
     def __init__(self):
         self._get_context = None
+        self._is_busy = None
         self._stop_event = threading.Event()
         self._thread = None
-        self._last_tick_date = None
+        # job_id -> 最後に実行した日付("YYYY-MM-DD")。ジョブごとに1日1回のゲート。
+        self._last_run_dates = {}
+        # 今日ぶんの job_id -> 実行結果。日付が変わったらまるごと捨てる
+        # （last_run_info["jobs"]の材料。1tick1ジョブになったため、
+        # 1回のtickの結果だけでは「今日何が走ったか」を表せないので累積する）。
+        self._day_results = {}
+        self._results_date = None
         self.last_run_info = {"last_run": None, "written": []}
+        self._running_job_name = ""
         # 終了確認ダイアログ(gui.py on_closing)用: JOBSループ実行中フラグ。
         # tick()自体はdaemonスレッド1本からしか呼ばれないため書き込み側の競合は
         # 無いが、is_running_job()はメインスレッド（closingハンドラ）から読まれる
@@ -366,9 +396,11 @@ class Scheduler:
         self._running_lock = threading.Lock()
         self._running_job = False
 
-    def start(self, get_context):
-        """get_context: () -> (cfg, llm, soul_id or None)"""
+    def start(self, get_context, is_busy=None):
+        """get_context: () -> (cfg, llm, soul_id or None)
+        is_busy: () -> bool。Trueの間はジョブを開始しない（会話・インポート優先）。"""
         self._get_context = get_context
+        self._is_busy = is_busy
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
@@ -379,42 +411,80 @@ class Scheduler:
         while not self._stop_event.wait(60):
             self.tick()
 
-    def tick(self, today=None):
-        """前回tickと日付が変わった時（または初回）だけJOBSを呼ぶ。
-        毎分ファイルスキャンしないための間引き。todayを渡せる形にして、
-        実際の日付に依存せずテストから発火判定を検証できるようにしてある。
-        configのscheduled_jobs[job["id"]]がFalseのジョブはスキップする
-        （キーが無ければ既定でON。DEFAULT_CONFIGは全ジョブTrueで補完されるので
-        実運用では欠けない想定だが、テストの素のcfgでも安全に動くようにしてある）。"""
-        today = today or datetime.date.today().isoformat()
-        if self._last_tick_date == today:
-            return
-        self._last_tick_date = today
+    def tick(self, now=None):
+        """走らせるべきジョブを1つだけ実行し、そのjob_idを返す（無ければNone）。
+
+        発火条件は3つ全部を満たすこと: (1) configで有効 (2) その日の実行時刻を
+        過ぎている (3) 今日まだ走っていない。時刻は「これより前には走らない」下限で
+        あって正時ぴったりの引き金ではないので、その時刻にアプリが消えていても
+        次に起動したtickでその日ぶんが走る（状態差分ベースの自己修復を維持する）。
+
+        1回のtickで1ジョブに絞るのは、溜まったジョブが一斉に走ってLLM呼び出しが
+        束になり、会話を長時間ブロックする（gui.send_messageがジョブ実行中は
+        送信を弾く）のを避けるため。_loopが60秒ごとに回すので、溜まっていても
+        1分に1つずつ消化される。
+
+        is_busy()がTrueの間は何も始めない（会話・インポート優先）。ジョブは
+        状態差分で自己修復するので、次のtickへ回しても失われない。
+        なおis_busy()はguiの_busy_lockを取りうるが、ここでは_running_lockを
+        取る前に呼び終えるためロック順の逆転（デッドロック）は起きない。"""
+        now = now or datetime.datetime.now()
+        today = now.date().isoformat()
         if self._get_context is None:
-            return
+            return None
+        if self._is_busy is not None and self._is_busy():
+            return None
         cfg, llm, soul_id = self._get_context()
         if not soul_id or not llm:
-            return
+            return None
         scheduled = cfg.get("scheduled_jobs", {})
-        results = {}
+        hours = cfg.get("scheduled_job_hours", {})
+        job = self._next_due_job(scheduled, hours, today, now.hour)
+        if job is None:
+            return None
+        self._last_run_dates[job["id"]] = today
         with self._running_lock:
             self._running_job = True
+            self._running_job_name = job["name"]
         try:
-            for job in JOBS:
-                if not scheduled.get(job["id"], True):
-                    continue
-                results[job["id"]] = job["run"](cfg, llm, soul_id)
+            result = job["run"](cfg, llm, soul_id)
         finally:
             # ジョブ内で例外が漏れた場合（現状のJOBS.runはいずれもベストエフォートで
             # 内部の例外を握るが、想定外の例外が漏れる可能性への保険）でも、
             # is_running_job()が「実行中のまま」に張り付かないようにする。
             with self._running_lock:
                 self._running_job = False
+                self._running_job_name = ""
+        if self._results_date != today:
+            self._results_date = today
+            self._day_results = {}
+        self._day_results[job["id"]] = result
         self.last_run_info = {
-            "last_run": datetime.datetime.now().isoformat(timespec="seconds"),
-            "written": results.get("daily_chronicle", []),
-            "jobs": results,
+            "last_run": now.isoformat(timespec="seconds"),
+            "written": self._day_results.get("daily_chronicle", []),
+            "jobs": dict(self._day_results),
         }
+        return job["id"]
+
+    def _next_due_job(self, scheduled, hours, today, hour):
+        """JOBSの並び順で、今この瞬間に走らせるべき最初のジョブを返す（無ければNone）。
+        並び順はそのまま優先順位でもある（日次→週次→月次。週次の素材は日次日記なので
+        同じ日のうちに上流を先に済ませる必要がある）。"""
+        for job in JOBS:
+            if not scheduled.get(job["id"], True):
+                continue
+            if self._last_run_dates.get(job["id"]) == today:
+                continue
+            if hour < _job_hour(job, hours):
+                continue
+            return job
+        return None
+
+    def running_job_name(self):
+        """実行中ジョブの表示名（idle時は""）。gui.send_messageが「いま○○を書いとる」と
+        伝えるために使う。"""
+        with self._running_lock:
+            return self._running_job_name
 
     def is_running_job(self):
         with self._running_lock:

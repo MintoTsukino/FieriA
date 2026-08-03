@@ -1207,6 +1207,9 @@
 
       <div class="card" id="scheduler-card">
         <h3>定期処理</h3>
+        <div class="hint" style="margin-bottom:10px;">
+          アプリ起動中に、指定した時刻を過ぎたら1日1回ずつ走ります（その時刻にアプリが消えていても、次に起動したときに走ります）。実行中は会話をお休みします。会話中は逆に始まりません
+        </div>
         <div id="scheduler-list"></div>
         <div class="toggle-row" style="margin-top:12px;">
           <input type="checkbox" id="wrapup-on-close-checkbox">
@@ -4509,6 +4512,24 @@ function renderMarkdownToHtml(raw) {
         title.style.minWidth = "auto";
         toggleRow.appendChild(checkbox);
         toggleRow.appendChild(title);
+        // 実行時刻。ジョブが束で走って会話を待たせないよう、既定で1時間ずつ散らしてある
+        var hourSelect = document.createElement("select");
+        hourSelect.style.marginLeft = "8px";
+        for (var h = 0; h < 24; h++) {
+          var opt = document.createElement("option");
+          opt.value = String(h);
+          opt.textContent = h + "時";
+          hourSelect.appendChild(opt);
+        }
+        hourSelect.value = String(job.hour);
+        hourSelect.addEventListener("change", function () {
+          window.pywebview.api.set_scheduled_job_hour(job.id, hourSelect.value).then(function () {
+            showToast(job.name + "を" + hourSelect.value + "時に設定した");
+          }).catch(function (err) {
+            showToast("時刻の変更に失敗した: " + err, "error");
+          });
+        });
+        toggleRow.appendChild(hourSelect);
         var desc = document.createElement("div");
         desc.className = "hint";
         desc.textContent = job.description;

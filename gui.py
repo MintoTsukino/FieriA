@@ -25,6 +25,7 @@ import wrapup as wrapup_mod
 from engine import Engine
 from env import delete_key, load_env, set_key
 from llm import REASONING_EFFORTS, build_provider, create_llm
+import scheduler as scheduler_mod
 from scheduler import JOBS, Scheduler
 
 
@@ -161,7 +162,8 @@ class Bridge:
         # をやめ、実LLM到達を構造的に遮断する。
         if not os.environ.get("FIERIA_TESTING"):
             self._scheduler.start(
-                lambda: (self._cfg, self._llm, self._cfg.get("active_soul"))
+                lambda: (self._cfg, self._llm, self._cfg.get("active_soul")),
+                is_busy=self._chat_busy,
             )
         self._importing = False
         self._import_stop = False
@@ -287,6 +289,13 @@ class Bridge:
     def send_message(self, text, images=None):
         if self._importing:
             return {"error": "インポート処理中は会話できない（完了かキャンセルを待って）"}
+        # 定期処理（日記・あらすじ等）の実行中は会話を受けない。同じSOULの記憶へ
+        # LLM経由で書く処理と会話が並走すると、記憶の読み書きが交差するため。
+        # ジョブ側も逆向きに会話中は開始しない（Scheduler.tickのis_busyガード）ので、
+        # 「会話とジョブが同時に走る」状態は両側から塞がれている。
+        if self._scheduler.is_running_job():
+            job_name = self._scheduler.running_job_name() or "定期処理"
+            return {"error": f"いま{job_name}を書いとるところ。終わるまでちょい待ってな"}
         if not self._engine:
             return {"error": "SOULが未作成。設定からSOULを作ってください"}
         oversized = _oversized_pdf_error(images)
@@ -336,6 +345,13 @@ class Bridge:
         with self._busy_lock:
             chat_busy = self._busy_turns > 0
         return chat_busy or self._scheduler.is_running_job()
+
+    def _chat_busy(self):
+        """Schedulerへ渡す逆向きガード: 会話ターン処理中またはインポート処理中ならTrue。
+        is_llm_busyと違いスケジューラ自身の実行状態は見ない（自分の状態を自分に
+        問い返す形になり、常時Trueで自滅するため）。"""
+        with self._busy_lock:
+            return self._busy_turns > 0 or self._importing
 
     def _push_turn_status(self, kind):
         """ツール実行状態（"memory_write"/"tools"）をJS側へ通知する（表示専用）。
@@ -1302,17 +1318,37 @@ class Bridge:
         info = self._scheduler.last_run_info
         jobs_result = info.get("jobs", {})
         scheduled_cfg = self._cfg.get("scheduled_jobs", {})
+        hours_cfg = self._cfg.get("scheduled_job_hours", {})
         return [{
             "id": job["id"],
             "name": job["name"],
             "description": job["description"],
             "enabled": scheduled_cfg.get(job["id"], True),
+            "hour": scheduler_mod._job_hour(job, hours_cfg),
             "last_run": info["last_run"],
             "last_result": jobs_result.get(job["id"], []),
         } for job in JOBS]
 
     def set_scheduled_job(self, job_id, enabled):
         self._cfg.setdefault("scheduled_jobs", {})[job_id] = bool(enabled)
+        config_mod.save_config(self._cfg)
+        return self.get_scheduled_jobs()
+
+    def set_scheduled_job_hour(self, job_id, hour):
+        """定期処理の実行時刻（0-23時）を設定する。未知のjob_idは無視し、
+        範囲外・非数はその上書きを外す（＝JOBSの既定時刻へ戻す）。
+        set_scheduled_jobと同じく、JS由来の値の型はここで確定させる。"""
+        if job_id not in [j["id"] for j in JOBS]:
+            return self.get_scheduled_jobs()
+        hours = self._cfg.setdefault("scheduled_job_hours", {})
+        try:
+            value = int(hour)
+        except (TypeError, ValueError):
+            value = None
+        if value is None or not 0 <= value <= 23:
+            hours.pop(job_id, None)
+        else:
+            hours[job_id] = value
         config_mod.save_config(self._cfg)
         return self.get_scheduled_jobs()
 

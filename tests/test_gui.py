@@ -2271,3 +2271,99 @@ def test_save_settings_persists_wrapup_on_close_as_bool():
     b.save_settings({"wrapup_on_close": False})
     assert b._cfg["wrapup_on_close"] is False
     assert b.get_settings()["wrapup_on_close"] is False
+
+
+# --- 定期処理の時間割・会話ブロック 2026-08-03 ---
+
+class _StubScheduler:
+    def __init__(self, running=False, name=""):
+        self._running = running
+        self._name = name
+        self.last_run_info = {"last_run": None, "written": [], "jobs": {}}
+
+    def is_running_job(self):
+        return self._running
+
+    def running_job_name(self):
+        return self._name
+
+    def start(self, get_context, is_busy=None):
+        pass
+
+
+def test_send_message_blocked_while_scheduled_job_running():
+    """「いまごめん日記かいとるけん待って」。ジョブ名を出して、何を待たされているか分かるようにする。"""
+    import gui
+    b = gui.Bridge()
+    b._engine = object()
+    b._scheduler = _StubScheduler(running=True, name="日次日記")
+
+    result = b.send_message("こんにちは")
+
+    assert "日次日記" in result["error"]
+
+
+def test_send_message_not_blocked_when_no_job_running():
+    """ジョブが走っていなければブロック文言は出ない（SOUL未作成の既存エラーになる）。"""
+    import gui
+    b = gui.Bridge()
+    b._engine = None
+    b._scheduler = _StubScheduler(running=False)
+
+    result = b.send_message("こんにちは")
+
+    assert "書いとる" not in result["error"]
+
+
+def test_get_scheduled_jobs_includes_hour():
+    import gui
+    b = gui.Bridge()
+    jobs = {j["id"]: j for j in b.get_scheduled_jobs()}
+
+    assert jobs["daily_chronicle"]["hour"] == 0
+    assert jobs["weekly_digest"]["hour"] == 4
+
+
+def test_get_scheduled_jobs_reflects_hour_override():
+    import gui
+    b = gui.Bridge()
+    b._cfg["scheduled_job_hours"] = {"weekly_digest": 22}
+    jobs = {j["id"]: j for j in b.get_scheduled_jobs()}
+
+    assert jobs["weekly_digest"]["hour"] == 22
+
+
+def test_set_scheduled_job_hour_persists_and_validates():
+    import gui
+    b = gui.Bridge()
+
+    b.set_scheduled_job_hour("weekly_digest", "21")
+    assert b._cfg["scheduled_job_hours"]["weekly_digest"] == 21
+
+    # 範囲外・非数は既定へ戻す（＝上書きを外す）
+    b.set_scheduled_job_hour("weekly_digest", 99)
+    assert "weekly_digest" not in b._cfg.get("scheduled_job_hours", {})
+    assert {j["id"]: j for j in b.get_scheduled_jobs()}["weekly_digest"]["hour"] == 4
+
+
+def test_set_scheduled_job_hour_rejects_unknown_job_id():
+    import gui
+    b = gui.Bridge()
+
+    b.set_scheduled_job_hour("no-such-job", 5)
+
+    assert "no-such-job" not in b._cfg.get("scheduled_job_hours", {})
+
+
+def test_chat_busy_reports_conversation_and_import():
+    """スケジューラへ渡す逆向きガード: 会話中・インポート中はジョブを始めさせない。"""
+    import gui
+    b = gui.Bridge()
+    assert b._chat_busy() is False
+
+    b._busy_turns = 1
+    assert b._chat_busy() is True
+
+    b._busy_turns = 0
+    b._importing = True
+    assert b._chat_busy() is True
