@@ -2770,3 +2770,33 @@ def test_compact_context_works_after_a_stopped_turn():
     result = b.compact_context()
 
     assert result["ok"] is True
+
+
+# --- tool_mode（ネイティブfunction callingの方式設定） 2026-08-04 ---
+
+def test_save_settings_normalizes_tool_mode():
+    import gui
+    b = gui.Bridge()
+    b.save_settings({"llm": {"provider": "d", "providers": {
+        "d": {"type": "openai_compat", "tool_mode": "NATIVE"},
+        "o": {"type": "openai_compat", "tool_mode": "でたらめ"},
+        "g": {"type": "gemini"},
+    }}})
+
+    provs = b._cfg["llm"]["providers"]
+    assert provs["d"]["tool_mode"] == "native"
+    assert "tool_mode" not in provs["o"]   # 不正はキーごと落とす=auto
+    assert "tool_mode" not in provs["g"]
+
+
+def test_save_settings_accepts_fence_and_auto():
+    import gui
+    b = gui.Bridge()
+    b.save_settings({"llm": {"provider": "d", "providers": {
+        "d": {"type": "openai_compat", "tool_mode": "fence"},
+        "e": {"type": "openai_compat", "tool_mode": "auto"},
+    }}})
+
+    provs = b._cfg["llm"]["providers"]
+    assert provs["d"]["tool_mode"] == "fence"
+    assert "tool_mode" not in provs["e"]   # autoは既定なので保存しない
