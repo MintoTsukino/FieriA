@@ -1208,6 +1208,13 @@
       <div class="card" id="scheduler-card">
         <h3>定期処理</h3>
         <div id="scheduler-list"></div>
+        <div class="toggle-row" style="margin-top:12px;">
+          <input type="checkbox" id="wrapup-on-close-checkbox">
+          <label style="min-width:auto;">終了・SOUL切替時にその場で日記を書く（即時日記）</label>
+        </div>
+        <div class="hint" style="margin-top:4px;">
+          ※OFFでも日記は消えません。日付が変わったタイミング（起動中なら0時すぎ・消えていれば次回起動時）に、その日の日記をまとめて書きます（書いた後に会話が続いていた日は続きを追記）
+        </div>
       </div>
 
       </div>
@@ -3705,6 +3712,17 @@ function renderMarkdownToHtml(raw) {
     });
   });
 
+  // FieriA拡張: 即時日記（終了・SOUL切替時のwrapup）のON/OFF。checkbox系の即時保存パターン
+  $("wrapup-on-close-checkbox").addEventListener("change", function () {
+    var payload = { wrapup_on_close: $("wrapup-on-close-checkbox").checked };
+    window.pywebview.api.save_settings(payload).then(function (data) {
+      state.settings = data;
+      showToast("即時日記の設定を保存した");
+    }).catch(function (err) {
+      showToast("保存に失敗した: " + err, "error");
+    });
+  });
+
   // FieriA拡張: ストリーミング表示のON/OFF（他のcheckbox系設定と同じ即時保存パターン）
   $("streaming-enabled-checkbox").addEventListener("change", function () {
     var payload = { streaming: $("streaming-enabled-checkbox").checked };
@@ -4459,6 +4477,9 @@ function renderMarkdownToHtml(raw) {
   }
 
   function renderScheduledJobs() {
+    if (state.settings) {
+      $("wrapup-on-close-checkbox").checked = state.settings.wrapup_on_close === true;
+    }
     var box = $("scheduler-list");
     box.innerHTML = "";
     window.pywebview.api.get_scheduled_jobs().then(function (jobs) {

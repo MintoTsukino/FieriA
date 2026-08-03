@@ -526,6 +526,7 @@ class Bridge:
             "theme": self._cfg.get("theme"),
             "provider_labels": config_mod.PROVIDER_LABELS,
             "wrapup_max_tokens": self._cfg.get("wrapup_max_tokens", 2000),
+            "wrapup_on_close": self._cfg.get("wrapup_on_close", False),
             "context_limit_tokens": self._cfg.get("context_limit_tokens", 0),
             "workspace_dir": self._cfg.get("workspace_dir", ""),
             "auto_role_switch": self._cfg.get("auto_role_switch", True),
@@ -563,6 +564,8 @@ class Bridge:
             self._cfg["theme"] = val if val in config_mod.THEME_IDS else "light"
         if "wrapup_max_tokens" in payload:
             self._cfg["wrapup_max_tokens"] = payload["wrapup_max_tokens"]
+        if "wrapup_on_close" in payload:
+            self._cfg["wrapup_on_close"] = bool(payload["wrapup_on_close"])
         if "context_limit_tokens" in payload:
             self._cfg["context_limit_tokens"] = payload["context_limit_tokens"]
         if "workspace_dir" in payload:
@@ -1319,6 +1322,8 @@ class Bridge:
         return {"ok": True}
 
     def _maybe_wrapup(self):
+        if not self._cfg.get("wrapup_on_close", False):
+            return
         if self._engine and self._llm and self._cfg.get("active_soul"):
             wrapup_mod.write_daily_chronicle(self._cfg, self._llm, self._cfg["active_soul"])
 

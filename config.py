@@ -232,6 +232,11 @@ DEFAULT_CONFIG = {
         "wiki_gardening": False,
     },
     "wrapup_max_tokens": 2000,
+    # 終了時・SOUL切替時にその場で日記を書くか（即時日記）。既定OFF：日記は
+    # 0時（日付が変わった最初のtick。アプリが消えていれば次回起動時）に
+    # スケジューラのdaily_chronicleジョブが新規生成＋続き追記でまとめて書く。
+    # ONにすると従来どおり閉じた瞬間・切替の瞬間にも書く（すぐ読みたい人向け）。
+    "wrapup_on_close": False,
     # MEMORY.md（記憶の索引・常時プロンプト注入）がこの文字数を超えたら、定期処理
     # （scheduler.py index_maintenanceジョブ）がLLMに整理・書き直しを依頼する
     # （Claude Code方式：索引が上限超過したらハーネスが書き直しを強制する、のFieriA版）。

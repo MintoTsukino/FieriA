@@ -2209,3 +2209,65 @@ def test_embedding_status_safe_without_soul():
     b._cfg["active_soul"] = None
     st = b.embedding_status()
     assert st == {"count": 0, "running": False}
+
+
+# --- 即時日記（終了時・SOUL切替時のwrapup）トグル 2026-08-03 ---
+# 0時のスケジューラ（新規＋追記）が全日をカバーするようになったため、
+# その場での日記書きはwrapup_on_closeトグル（既定OFF）に降格した。
+
+def _wrapup_recorder(monkeypatch):
+    import gui
+    calls = []
+    monkeypatch.setattr(
+        gui.wrapup_mod, "write_daily_chronicle",
+        lambda cfg, llm, soul_id: calls.append(soul_id))
+    return calls
+
+
+def test_maybe_wrapup_skipped_by_default(monkeypatch):
+    import gui
+    import soul
+    calls = _wrapup_recorder(monkeypatch)
+    b = gui.Bridge()
+    sid = soul.create_soul("即時日記既定OFFテスト")
+    b._cfg["active_soul"] = sid
+    b._engine = object()
+    b._llm = object()
+
+    b.end_session()
+
+    assert calls == []
+
+
+def test_maybe_wrapup_runs_when_enabled(monkeypatch):
+    import gui
+    import soul
+    calls = _wrapup_recorder(monkeypatch)
+    b = gui.Bridge()
+    sid = soul.create_soul("即時日記ONテスト")
+    b._cfg["active_soul"] = sid
+    b._cfg["wrapup_on_close"] = True
+    b._engine = object()
+    b._llm = object()
+
+    b.end_session()
+
+    assert calls == [sid]
+
+
+def test_default_config_has_wrapup_on_close_off():
+    import config as config_mod
+    assert config_mod.DEFAULT_CONFIG["wrapup_on_close"] is False
+
+
+def test_save_settings_persists_wrapup_on_close_as_bool():
+    import gui
+    b = gui.Bridge()
+
+    b.save_settings({"wrapup_on_close": 1})
+    assert b._cfg["wrapup_on_close"] is True
+    assert b.get_settings()["wrapup_on_close"] is True
+
+    b.save_settings({"wrapup_on_close": False})
+    assert b._cfg["wrapup_on_close"] is False
+    assert b.get_settings()["wrapup_on_close"] is False
