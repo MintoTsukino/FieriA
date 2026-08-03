@@ -1,9 +1,18 @@
 """engine.py — 会話エンジン。1ターン = プロンプト合成 → LLM → ツール実行（→必要なら再応答）。
 llmオブジェクトは chat(messages, max_tokens=None) -> str を持つこと（Task 5で確認したNikoVoice
 llm.pyの実物、またはテストのフェイク）。systemメッセージはself.messagesには混ぜず、
-{"role": "system", "content": system_text} を毎ターン合成してmessages先頭に付けて渡す。"""
+{"role": "system", "content": system_text} を毎ターン合成してmessages先頭に付けて渡す。
+
+FieriA拡張: ネイティブfunction calling。llmオブジェクトがsupports_native_tools=True
+（クラス属性）を持ち、cfg側のtool_modeがfence指定でなければ、_process_turn_nativeが
+APIネイティブのtoolsパラメータでツールを呼ぶ経路を使う（_use_native_tools参照）。
+ツール往復（assistant tool_calls・role:toolメッセージ）はローカル変数exchangeにだけ
+積み、self.messagesには最終応答の本文だけを残す——圧縮・復元・ログ・Gemini role交互の
+既存経路を無改修で守るための設計上の要（tests/test_engine_native_tools.py参照）。"""
+import json
 import re
 
+import llm as llm_mod
 import memory_tools
 import prompt as prompt_mod
 import recall as recall_mod
@@ -75,6 +84,27 @@ def _estimate_attachment_tokens(img):
     return max(IMAGE_TOKEN_ESTIMATE, b64_len // PDF_B64_CHARS_PER_TOKEN)
 
 
+class _TurnStopped(Exception):
+    """内部シグナル専用（engine.py外には出さない）。ネイティブ/フェンス両ループの
+    途中で_stop_requestedを検知したことをprocess_turnの共通except節へ伝える。
+    従来のフェンス経路は各チェックポイントで直接returnしていたが、ループ本体を
+    _process_turn_native/_process_turn_fenceへ分離した後もprocess_turn側で
+    _stopped_result()を1箇所にまとめるための橋渡し。"""
+
+
+def _status_kind_for_names(names):
+    """ツール実行中にon_statusへ渡す種別。優先順位: web_search > 記憶書き込み > 汎用
+    （表示の優先順位はprocess_turn従来コメントのとおり——検索は数秒かかるうえ
+    「何をしているか」が最も伝わる情報のため最優先で見せる）。フェンス経路・
+    ネイティブ経路の両方から使う共通ロジック（callの形が違う＝tool名か"name"キーかが
+    異なるだけなので、呼び出し側で名前のリストに正規化してから渡す）。"""
+    if "web_search" in names:
+        return "web_search"
+    if any(n in memory_tools.MEMORY_WRITE_TOOLS for n in names):
+        return "memory_write"
+    return "tools"
+
+
 def _estimate_tokens(messages):
     """会話履歴の概算トークン数。
 
@@ -109,6 +139,11 @@ class Engine:
         # 前ターンが「【ツールを使う】のようなト書きだけで実呼び出しゼロ」だったか
         # （ト書き検知・次ターンで指摘。_NARRATED_TOOL_PATTERN参照）
         self._narrated_tool_use = False
+        # FieriA拡張: ネイティブfunction calling。実行時にAPI側からtoolsパラメータを
+        # 拒否された（llm.NativeToolsUnsupported）ら立てる。一度立ったらこの
+        # Engineインスタンスは以後ずっとフェンス経路固定（_use_native_tools参照）——
+        # 同じエンドポイントに毎ターン拒否されるツール定義を送り直しても無駄なため。
+        self._native_broken = False
 
     def request_stop(self):
         """考え中の応答を止めたい、というUI側からの要求を受け付ける。
@@ -272,6 +307,171 @@ class Engine:
                 break
         return "".join(chunks)
 
+    def _use_native_tools(self):
+        """ネイティブfunction callingを使うかの解決。
+        fence指定→使わない / native・auto→LLMクラスが対応していれば使う。
+        _native_broken（実行時にtoolsを拒否された）が立っていたら常に使わない。"""
+        if self._native_broken:
+            return False
+        entry = (self.cfg.get("llm") or {}).get("providers", {}).get(
+            (self.cfg.get("llm") or {}).get("provider", ""), {})
+        mode = (entry.get("tool_mode") or "auto").strip().lower()
+        if mode == "fence":
+            return False
+        return bool(getattr(self.llm, "supports_native_tools", False))
+
+    def _prompt_nudges(self):
+        """記憶の書き促し・嘘発見器・ト書き検知の注入文（system_textの追加分）。
+        ネイティブ/フェンス両経路で共通——「書く内容の規範」であってツールの
+        呼び方の作法ではないため、経路によらず同じ文言を使う（ブリーフの指示どおり
+        「そのまま生かす」。_unbacked_write_claim側の文言がfieria-tool記法に触れる点は
+        ネイティブ経路では字面が合わないが、ブリーフが要求する「従来どおり」を優先した
+        既知の制約——実害は「たまに的外れな言い回しが混ざる」程度に留まる）。"""
+        text = ""
+        if self._turns_since_memory_write >= MEMORY_WRITE_NUDGE_TURNS:
+            text += ("\n\n（システム: しばらく記憶を書いていない。この会話の中に"
+                     "残すべき事実・設定・気づきがあれば、応答の中で記憶ツールに書くこと。"
+                     "無ければ書かなくてよい）")
+        if self._unbacked_write_claim:
+            text += ("\n\n（システム: 前の応答で記憶に書いたと言ったが、実際には"
+                     "ツールを呼んでいないため何も保存されていない。本当に残すなら、"
+                     "今度こそ応答の中にfieria-toolブロックを書くこと）")
+        if self._narrated_tool_use:
+            text += ("\n\n（システム: 前の応答で「【ツールを使う】」のような"
+                     "地の文を書いたが、それではツールは動かない。演技の描写ではなく、"
+                     "応答の中に実際のfieria-toolブロックのJSONを書いたときだけ実行される）")
+        return text
+
+    def _build_fence_system_text(self, recall_block):
+        """フェンス経路用system_textの合成（tools_spec込み）。ネイティブからの
+        フォールバック時、および従来のフェンス経路そのものの両方から呼ぶ
+        （重複合成を避けるための共通化）。"""
+        tools_spec = memory_tools.build_tools_spec(self.cfg, self.soul_id)
+        system_text = prompt_mod.build_system_text(
+            self.cfg, self.soul_id, tools_spec=tools_spec)
+        if recall_block:
+            system_text += "\n\n" + recall_block
+        return system_text
+
+    def _process_turn_native(self, system_text, operations, on_delta, on_status):
+        """ネイティブfunction callingのツールループ。system_textはラウンド間で
+        再合成しない（ブリーフの仕様: フェンス経路と違いtools_specを持たないため
+        毎ラウンド作り直す理由がない）。ツール往復はexchange（ローカル変数）にだけ
+        積み、self.messagesには一切触れない——最終本文だけを呼び出し元(process_turn)
+        が従来どおりmessagesへ追加する。
+
+        戻り値: (reply, any_tool_call)。停止要求を検知したら_TurnStoppedを送出する。
+        llm.NativeToolsUnsupportedはここで握らずそのまま呼び出し元へ伝播させる
+        （フェンスへのフォールバックはprocess_turn側の責務）。"""
+        native_tools = memory_tools.build_native_tools(self.cfg, self.soul_id)
+        exchange = []
+        reply = ""
+        any_tool_call = False
+        for _ in range(MAX_TOOL_ROUNDS + 1):
+            messages = [{"role": "system", "content": system_text}] + self.messages + exchange
+            result = self.llm.chat_tools(messages, native_tools, max_tokens=None)
+            if self._stop_requested:
+                raise _TurnStopped()
+            calls = result.get("tool_calls") or []
+            text = result.get("text") or ""
+            if not calls:
+                reply = text
+                break
+            any_tool_call = True
+            if on_status:
+                try:
+                    on_status(_status_kind_for_names([c.get("name") for c in calls]))
+                except Exception:
+                    pass
+            round_ops = []
+            for c in calls:
+                name = c.get("name", "")
+                args = c.get("arguments") or {}
+                if "__raw" in args:
+                    op = {"ok": False, "op": name, "detail": "引数のJSONが壊れていた"}
+                else:
+                    op = memory_tools.execute(
+                        self.soul_id, {"tool": name, **args}, self.cfg)
+                operations.append(op)
+                round_ops.append(op)
+            exchange.append({
+                "role": "assistant",
+                "content": text or None,
+                "tool_calls": [
+                    {"id": c.get("id") or "", "type": "function",
+                     "function": {"name": c.get("name", ""),
+                                  "arguments": json.dumps(
+                                      c.get("arguments") or {}, ensure_ascii=False)}}
+                    for c in calls
+                ],
+            })
+            for c, op in zip(calls, round_ops):
+                exchange.append({"role": "tool", "tool_call_id": c.get("id") or "",
+                                  "content": f"{'ok' if op['ok'] else 'error'}: {op['detail']}"})
+            reply = text
+            if self._stop_requested:
+                raise _TurnStopped()
+        else:
+            # ラウンド上限到達（forがbreakせず尽きた）: 最後のtextを応答にする。
+            # 空なら「ツール実行だけで終わった」ことが分かる文言で埋める。
+            reply = reply or "（ツール実行だけで応答が尽きた）"
+        return reply, any_tool_call
+
+    def _process_turn_fence(self, system_text, recall_block, operations, on_delta, on_status):
+        """従来のフェンス（本文内```fieria-tool```JSON）方式のツールループ。
+        process_turnから抽出しただけで挙動は無改修——ネイティブ経路と共通化した
+        呼び出し元の下で使い回すための切り出し（重複を作らないため）。
+        戻り値: (reply, any_tool_call)。停止要求検知時は_TurnStoppedを送出する
+        （旧実装のreturn self._stopped_result(...)を、呼び出し元1箇所に畳むため）。"""
+        reply = ""
+        any_tool_call = False
+        for i in range(MAX_TOOL_ROUNDS + 1):
+            if i > 0:
+                system_text = self._build_fence_system_text(recall_block)
+            raw = self._call_llm(system_text, on_delta)
+            if self._stop_requested:
+                raise _TurnStopped()
+            reply, calls = memory_tools.extract_tool_calls(raw)
+            any_tool_call = any_tool_call or bool(calls)
+
+            read_results = []
+            feedback_images = []
+            if calls and on_status:
+                names = [c.get("tool") for c in calls if isinstance(c, dict)]
+                try:
+                    on_status(_status_kind_for_names(names))
+                except Exception:
+                    pass
+            for call in calls:
+                if call.get("tool") == "__parse_error__":
+                    snippet = call.get("snippet", "")
+                    operations.append({
+                        "ok": False, "op": "tool_parse",
+                        "detail": f"ツールブロックのJSONが壊れていて実行できなかった: {snippet[:60]}…"})
+                    read_results.append(
+                        "（システム: fieria-toolブロックのJSONが壊れていて実行できなかった。"
+                        f"同じ内容を正しいJSON1個のブロックで書き直すこと。壊れていた断片: {snippet}）")
+                    continue
+                result = memory_tools.execute(self.soul_id, call, self.cfg)
+                operations.append(result)
+                if call.get("tool") in memory_tools.FEEDBACK_TOOLS and result["ok"]:
+                    label = call.get("path") or call.get("query") or call.get("tool")
+                    read_results.append(f"[{label}]\n{result['detail']}")
+                    feedback_images.extend(result.get("attachments") or [])
+
+            if not read_results:
+                break
+            self.messages.append({"role": "assistant", "content": raw})
+            feedback_msg = {
+                "role": "user",
+                "content": "（システム: 記憶ツールの結果）\n" + "\n\n".join(read_results)}
+            if feedback_images:
+                feedback_msg["images"] = feedback_images
+            self.messages.append(feedback_msg)
+        if self._stop_requested:
+            raise _TurnStopped()
+        return reply, any_tool_call
+
     def process_turn(self, user_text, images=None, on_delta=None, on_status=None):
         """user_text: ユーザー発言。images: [{"mime", "b64"}, ...]（省略/None可、後方互換）。
         添付があれば各画像をsoul.save_attachmentでファイル保存し、ログにはb64を含めず
@@ -280,7 +480,15 @@ class Engine:
 
         on_delta: FieriA拡張・ストリーミング用コールバック（省略時None＝従来動作）。
         指定するとLLM応答の文字が生成され次第 on_delta(text_delta) が呼ばれる
-        （_call_llm参照）。"""
+        （_call_llm参照）。
+
+        FieriA拡張: ネイティブfunction calling。_use_native_toolsがTrueなら
+        _process_turn_nativeへ委譲する（system_textはtools_spec無し＋
+        NATIVE_SPEC_NOTE）。ネイティブ経路がllm.NativeToolsUnsupportedを送出したら
+        self._native_broken=Trueを立て、userメッセージは再追加・再ログせずに
+        （既に下でこの関数内で1回だけappend済み）フェンス経路で同じターンを
+        やり直す——「ユーザー発言・履歴を失わない、二重append_logもしない」という
+        ブリーフの要求を、userメッセージ追加をパス分岐より前に1回だけ行う構造で満たす。"""
         self._stop_requested = False
         operations = []
 
@@ -291,36 +499,31 @@ class Engine:
         # ままにして、次ターンで再度注入されるようにする（安全側）。
         due_reminders_at_start = soul_mod.due_reminders(self.soul_id)
 
+        use_native = self._use_native_tools()
+
+        # 連想記憶（auto-recall）: user_textから既存のFTS検索(search.py)で関連記憶を
+        # 裏引きしてsystem_text末尾に注入する。ここで1回だけ検索し、フェンス経路の
+        # ツールループ再構築（_process_turn_fence内、i>0）では同じ recall_block を
+        # 使い回す——無駄な再検索とターン内での注入内容の揺れを防ぐため。失敗・0件時は
+        # recall_blockが空文字列になるだけで会話は壊れない（recall.build_recall_block参照）。
+        recall_block = recall_mod.build_recall_block(self.cfg, self.soul_id, user_text)
+
         # system_textはmessagesと一緒に毎回LLMへ送られる実体なので、圧縮の閾値判定にも
         # 含める（messagesだけの概算だと閾値超過を見逃す）。ここで組んだものは後段の
         # ツールループ1周目にそのまま使い回す（毎ターン同じ引数で合成するので無駄がない。
-        # 2周目以降は既存どおりループ内で再合成する）。
-        tools_spec = memory_tools.build_tools_spec(self.cfg, self.soul_id)
-        system_text = prompt_mod.build_system_text(
-            self.cfg, self.soul_id, tools_spec=tools_spec)
-
-        # 連想記憶（auto-recall）: user_textから既存のFTS検索(search.py)で関連記憶を
-        # 裏引きしてsystem_text末尾に注入する。ここで1回だけ検索し、ツールループの
-        # 再構築（i>0、下記参照）では同じ recall_block を使い回す——無駄な再検索と
-        # ターン内での注入内容の揺れを防ぐため。失敗・0件時はrecall_blockが空文字列に
-        # なるだけで会話は壊れない（recall.build_recall_block参照）。
-        recall_block = recall_mod.build_recall_block(self.cfg, self.soul_id, user_text)
-        if recall_block:
-            system_text += "\n\n" + recall_block
-        # 記憶の書き促し（実機FB 2026-07-23: 促さないと自分から書かない）。
-        # 書くかどうか・何を書くかは本人判断のまま、気づきの機会だけを注入する。
-        if self._turns_since_memory_write >= MEMORY_WRITE_NUDGE_TURNS:
-            system_text += ("\n\n（システム: しばらく記憶を書いていない。この会話の中に"
-                            "残すべき事実・設定・気づきがあれば、応答の中で記憶ツールに書くこと。"
-                            "無ければ書かなくてよい）")
-        if self._unbacked_write_claim:
-            system_text += ("\n\n（システム: 前の応答で記憶に書いたと言ったが、実際には"
-                            "ツールを呼んでいないため何も保存されていない。本当に残すなら、"
-                            "今度こそ応答の中にfieria-toolブロックを書くこと）")
-        if self._narrated_tool_use:
-            system_text += ("\n\n（システム: 前の応答で「【ツールを使う】」のような"
-                            "地の文を書いたが、それではツールは動かない。演技の描写ではなく、"
-                            "応答の中に実際のfieria-toolブロックのJSONを書いたときだけ実行される）")
+        # フェンス経路の2周目以降は既存どおりループ内で再合成する——_build_fence_system_text
+        # を使い回す。ネイティブ経路はラウンド間で再合成しない——tools_specを持たない
+        # ため作り直す理由がない）。
+        if use_native:
+            system_text = prompt_mod.build_system_text(self.cfg, self.soul_id, tools_spec="")
+            system_text += "\n\n" + memory_tools.NATIVE_SPEC_NOTE
+            if recall_block:
+                system_text += "\n\n" + recall_block
+        else:
+            system_text = self._build_fence_system_text(recall_block)
+        # 記憶の書き促し・嘘発見器・ト書き検知（実機FB 2026-07-23/2026-08-04）。
+        # ネイティブ/フェンス両経路で共通の注入文（_prompt_nudges参照）。
+        system_text += self._prompt_nudges()
 
         # 圧縮判定はuserメッセージ追加前・start_len記録前に完結させる。圧縮は正当な
         # 状態変更であり、この後の例外/停止時ロールバック（start_len基準）の対象外とする。
@@ -368,77 +571,28 @@ class Engine:
         # あるターンは演技扱いしない（保守側。壊れJSONは__parse_error__の差し戻しが担当）。
         any_tool_call = False
         try:
-            for i in range(MAX_TOOL_ROUNDS + 1):
-                if i > 0:
-                    tools_spec = memory_tools.build_tools_spec(self.cfg, self.soul_id)
-                    system_text = prompt_mod.build_system_text(
-                        self.cfg, self.soul_id, tools_spec=tools_spec)
-                    if recall_block:
-                        system_text += "\n\n" + recall_block
-                raw = self._call_llm(system_text, on_delta)
-                if self._stop_requested:
-                    return self._stopped_result(start_len, operations,
-                                                 recall_used=bool(recall_block))
-                reply, calls = memory_tools.extract_tool_calls(raw)
-                any_tool_call = any_tool_call or bool(calls)
-
-                read_results = []
-                feedback_images = []
-                # ストリーム表示が終わった後もツール実行（記憶書き込み等）が続く場合、
-                # UIへ状態を通知して「無言の間」を可視化する（実機FB 2026-07-23）。
-                # on_statusは表示専用コールバック——例外で会話を壊さない。
-                if calls and on_status:
-                    # 表示の優先順位: 検索 > 書き込み > 汎用。検索は数秒かかるうえ
-                    # 「何をしているか」が最も伝わる情報のため最優先で見せる。
-                    if any(c.get("tool") == "web_search" for c in calls
-                           if isinstance(c, dict)):
-                        kind = "web_search"
-                    elif any(c.get("tool") in memory_tools.MEMORY_WRITE_TOOLS
-                             for c in calls if isinstance(c, dict)):
-                        kind = "memory_write"
-                    else:
-                        kind = "tools"
-                    try:
-                        on_status(kind)
-                    except Exception:
-                        pass
-                for call in calls:
-                    if call.get("tool") == "__parse_error__":
-                        # フェンスは見つかったがJSONが壊れていたブロック（memory_tools側で
-                        # 検出・除去済み）。execute()には流さず（未知ツール扱いの二重報告を
-                        # 避けるため）ここで失敗記録と書き直し要求の差し戻しを行う。
-                        snippet = call.get("snippet", "")
-                        operations.append({
-                            "ok": False, "op": "tool_parse",
-                            "detail": f"ツールブロックのJSONが壊れていて実行できなかった: {snippet[:60]}…"})
-                        read_results.append(
-                            "（システム: fieria-toolブロックのJSONが壊れていて実行できなかった。"
-                            f"同じ内容を正しいJSON1個のブロックで書き直すこと。壊れていた断片: {snippet}）")
-                        continue
-                    result = memory_tools.execute(self.soul_id, call, self.cfg)
-                    operations.append(result)
-                    if call.get("tool") in memory_tools.FEEDBACK_TOOLS and result["ok"]:
-                        label = call.get("path") or call.get("query") or call.get("tool")
-                        read_results.append(f"[{label}]\n{result['detail']}")
-                        # read_pdf等が返すattachments（[{"mime","b64"},...]）は既存の
-                        # images添付と同形式なので、そのままuser差し戻しメッセージへ
-                        # 積める（llm.py側は無改修で通る。engine.py側の設計方針として
-                        # 「記憶ツール結果は差し戻しuserメッセージに乗せる」に画像も含める）。
-                        feedback_images.extend(result.get("attachments") or [])
-
-                if not read_results:
-                    break
-                # read/search結果を差し戻して再応答（書き込みだけなら差し戻さない）
-                self.messages.append({"role": "assistant", "content": raw})
-                feedback_msg = {
-                    "role": "user",
-                    "content": "（システム: 記憶ツールの結果）\n" + "\n\n".join(read_results)}
-                if feedback_images:
-                    feedback_msg["images"] = feedback_images
-                self.messages.append(feedback_msg)
-            if self._stop_requested:
-                return self._stopped_result(start_len, operations,
-                                             recall_used=bool(recall_block))
+            if use_native:
+                try:
+                    reply, any_tool_call = self._process_turn_native(
+                        system_text, operations, on_delta, on_status)
+                except llm_mod.NativeToolsUnsupported:
+                    # エンドポイントがtoolsパラメータを拒否した。ネイティブ経路の
+                    # ツール往復はexchange（ローカル変数）にしか積んでいないので
+                    # self.messagesはuserメッセージ追加時点のまま——巻き戻し不要で
+                    # そのままフェンス経路へやり直せる。以後このEngineは常時フェンス。
+                    # ここで使うsystem_textはネイティブ用（tools_spec無し）だったため、
+                    # フェンス用（tools_spec込み）に組み直す必要がある。
+                    self._native_broken = True
+                    system_text = self._build_fence_system_text(recall_block)
+                    system_text += self._prompt_nudges()
+                    reply, any_tool_call = self._process_turn_fence(
+                        system_text, recall_block, operations, on_delta, on_status)
+            else:
+                reply, any_tool_call = self._process_turn_fence(
+                    system_text, recall_block, operations, on_delta, on_status)
+        except _TurnStopped:
+            return self._stopped_result(start_len, operations,
+                                         recall_used=bool(recall_block))
         except Exception:
             # 応答のない孤立userメッセージ等で履歴を壊さないよう、開始時点まで巻き戻してから再送出する。
             # エラー表示は呼び出し元（将来のgui.py）の責務。

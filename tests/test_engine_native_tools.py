@@ -1,0 +1,160 @@
+"""Engineのネイティブfunction calling経路。FakeLLMのみ・実API不使用。"""
+import engine as engine_mod
+import soul as soul_mod
+
+
+class FakeNativeLLM:
+    supports_native_tools = True
+
+    def __init__(self, script):
+        """script: chat_tools呼び出しごとの戻り値リスト。"""
+        self.script = list(script)
+        self.tool_messages_seen = []
+        self.tools_seen = None
+
+    def chat(self, messages, max_tokens=None):
+        return "フェンス経路の返事"
+
+    def chat_tools(self, messages, tools, max_tokens=None):
+        self.tools_seen = tools
+        self.tool_messages_seen.append(
+            [m for m in messages if m.get("role") == "tool"])
+        return self.script.pop(0)
+
+
+def _cfg(tool_mode=None):
+    entry = {"type": "deepseek"}
+    if tool_mode:
+        entry["tool_mode"] = tool_mode
+    return {"fact_layer": {"enabled": False},
+            "llm": {"provider": "d", "providers": {"d": entry}}}
+
+
+def _final(text):
+    return {"text": text, "tool_calls": []}
+
+
+def _calling(name, args, text=""):
+    return {"text": text,
+            "tool_calls": [{"id": "c1", "name": name, "arguments": args}]}
+
+
+def test_native_path_executes_tool_and_returns_final_text():
+    sid = soul_mod.create_soul("ネイティブ実行テスト", "コア")
+    llm = FakeNativeLLM([
+        _calling("save_lesson", {"text": "JSONを書くこと"}),
+        _final("覚えたじょ"),
+    ])
+    eng = engine_mod.Engine(_cfg(), llm, sid)
+
+    result = eng.process_turn("これ覚えて")
+
+    assert result["reply"] == "覚えたじょ"
+    assert any(op["op"] == "save_lesson" and op["ok"] for op in result["operations"])
+    assert "JSONを書くこと" in soul_mod.read_file(sid, "lessons.md")
+
+
+def test_native_path_feeds_tool_result_back():
+    """2回目のchat_tools呼び出しに、1回目の実行結果がrole:toolで渡ること。"""
+    sid = soul_mod.create_soul("差し戻しテスト", "コア")
+    llm = FakeNativeLLM([
+        _calling("search_memory", {"query": "チュロス"}),
+        _final("見つけたじょ"),
+    ])
+    eng = engine_mod.Engine(_cfg(), llm, sid)
+
+    eng.process_turn("チュロス覚えとる？")
+
+    assert llm.tool_messages_seen[0] == []          # 1回目: tool結果なし
+    assert len(llm.tool_messages_seen[1]) == 1      # 2回目: 結果が渡っている
+    assert llm.tool_messages_seen[1][0]["tool_call_id"] == "c1"
+
+
+def test_native_exchange_never_persists_into_messages():
+    """設計の要: ツール往復はself.messagesに残らない（最終本文だけ残る）。
+    圧縮・復元・ログ・Gemini role交互の全経路を無改修で守るため。"""
+    sid = soul_mod.create_soul("履歴清潔テスト", "コア")
+    llm = FakeNativeLLM([
+        _calling("save_lesson", {"text": "x"}),
+        _final("done"),
+    ])
+    eng = engine_mod.Engine(_cfg(), llm, sid)
+
+    eng.process_turn("やって")
+
+    roles = [m["role"] for m in eng.messages]
+    assert "tool" not in roles
+    assert all("tool_calls" not in m for m in eng.messages)
+    assert roles == ["user", "assistant"]
+
+
+def test_fence_mode_setting_skips_native():
+    sid = soul_mod.create_soul("フェンス強制テスト", "コア")
+    llm = FakeNativeLLM([])  # chat_toolsが呼ばれたらpop失敗で落ちる
+    eng = engine_mod.Engine(_cfg(tool_mode="fence"), llm, sid)
+
+    result = eng.process_turn("やあ")
+
+    assert result["reply"] == "フェンス経路の返事"
+
+
+def test_native_unsupported_falls_back_to_fence_same_turn():
+    """toolsを拒否されたら同じターンをフェンスでやり直し、以後もフェンス固定。"""
+    import llm as llm_mod
+
+    class RejectingLLM(FakeNativeLLM):
+        def chat_tools(self, messages, tools, max_tokens=None):
+            raise llm_mod.NativeToolsUnsupported("tools not supported")
+
+    sid = soul_mod.create_soul("フォールバックテスト", "コア")
+    llm = RejectingLLM([])
+    eng = engine_mod.Engine(_cfg(), llm, sid)
+
+    result = eng.process_turn("やあ")
+
+    assert result["reply"] == "フェンス経路の返事"
+    assert eng._native_broken is True
+
+
+def test_native_broken_arguments_reported_not_executed():
+    sid = soul_mod.create_soul("壊れ引数テスト", "コア")
+    llm = FakeNativeLLM([
+        _calling("write_wiki", {"__raw": '{"topic": 壊れ'}),
+        _final("ごめん、やり直すじょ"),
+    ])
+    eng = engine_mod.Engine(_cfg(), llm, sid)
+
+    result = eng.process_turn("書いて")
+
+    bad = [op for op in result["operations"] if not op["ok"]]
+    assert bad and "壊れ" in bad[0]["detail"]
+    assert soul_mod.read_file(sid, "wiki/壊れ.md") == ""  # 実行されていない
+
+
+def test_native_round_limit_stops_loop():
+    import memory_tools
+    sid = soul_mod.create_soul("ラウンド上限テスト", "コア")
+    endless = [_calling("list_reminders", {})] * (engine_mod.MAX_TOOL_ROUNDS + 5)
+    llm = FakeNativeLLM(endless)
+    eng = engine_mod.Engine(_cfg(), llm, sid)
+
+    result = eng.process_turn("無限にやって")  # 例外なく返ること
+
+    assert result["reply"]
+
+
+def test_native_system_prompt_has_note_but_no_fence_spec():
+    captured = {}
+
+    class SpyLLM(FakeNativeLLM):
+        def chat_tools(self, messages, tools, max_tokens=None):
+            captured["system"] = messages[0]["content"]
+            return _final("ok")
+
+    sid = soul_mod.create_soul("ネイティブプロンプトテスト", "コア")
+    eng = engine_mod.Engine(_cfg(), SpyLLM([]), sid)
+
+    eng.process_turn("やあ")
+
+    assert "『』" in captured["system"]           # 書く規範は残る
+    assert "fieria-tool" not in captured["system"]  # フェンス作法は教えない
