@@ -521,6 +521,64 @@
   #mem-body.empty { color: var(--fg-dim); }
   #mem-body[readonly] { cursor: default; }
 
+  /* --- タスクビュー --- */
+  #tasks-view { padding: 24px; overflow-y: auto; gap: 16px; }
+  #tasks-cols { display: flex; gap: 20px; flex-wrap: wrap; }
+  .tasks-col {
+    flex: 1 1 320px; min-width: 280px;
+    background: var(--bg2); border-radius: var(--card-radius); box-shadow: var(--shadow);
+    padding: 18px;
+  }
+  .tasks-col h2 { margin: 0 0 12px 0; font-size: 15px; display: flex; align-items: center; gap: 6px; }
+  .tasks-col h3 { margin: 16px 0 8px 0; font-size: 13px; color: var(--fg-dim); }
+  .tasks-count { font-size: 12px; color: var(--fg-dim); font-weight: normal; }
+  .tasks-group-heading { margin: 14px 0 6px 0; font-size: 12px; color: var(--fg-dim); }
+  .tasks-group-heading:first-child { margin-top: 0; }
+  .task-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 10px 8px; border-radius: 10px; border-bottom: 1px solid var(--line);
+  }
+  .task-row:last-child { border-bottom: none; }
+  .task-row:hover { background: var(--bg); }
+  .task-main { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+  .task-text { font-size: 14px; word-break: break-word; }
+  .task-due { font-size: 13px; color: var(--fg-dim); white-space: nowrap; }
+  .task-due-danger { color: var(--danger); font-weight: bold; }
+  .task-chip { font-size: 12px; padding: 2px 8px; border-radius: 8px; white-space: nowrap; }
+  .task-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+  .task-check { width: 17px; height: 17px; cursor: pointer; }
+  .task-move-btn {
+    background: none; border: 1px solid var(--line); border-radius: 10px;
+    padding: 4px 10px; font-size: 12px; color: var(--fg); cursor: pointer; white-space: nowrap;
+  }
+  .task-move-btn:hover { background: var(--bg); }
+  .task-del-btn {
+    background: none; border: none; color: var(--fg-dim); cursor: pointer;
+    font-size: 16px; line-height: 1; padding: 4px 6px;
+  }
+  .task-del-btn:hover { color: var(--danger); }
+  #tasks-done-today { margin-top: 8px; }
+  .task-done-row {
+    display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+    border-radius: 8px; cursor: pointer; font-size: 13px; color: var(--fg-dim);
+  }
+  .task-done-row:hover { background: var(--bg); }
+  .task-done-text { text-decoration: line-through; }
+  #tasks-add-bar {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 14px 0 0 0; border-top: 1px solid var(--line); margin-top: 4px;
+  }
+  #tasks-add-bar input[type=text], #tasks-add-bar input[type=date], #tasks-add-bar select {
+    border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px;
+    font-size: 13px; font-family: inherit; background: var(--bg); color: var(--fg);
+  }
+  #task-add-text { flex: 1; min-width: 160px; }
+  #task-add-btn {
+    background: var(--accent); color: var(--accent-fg); border: none; border-radius: 10px;
+    padding: 8px 16px; font-size: 13px; cursor: pointer;
+  }
+  #tasks-status { color: var(--danger); }
+
   /* --- 設定ビュー --- */
   #settings-view { padding: 0; flex-direction: column; gap: 0; }
   #settings-view #settings-tabs {
@@ -871,6 +929,7 @@
     <div class="soul-name" id="soul-name-label">SOUL未選択</div>
     <div id="soul-menu"></div>
     <button class="nav-btn active" data-view="chat">チャット</button>
+    <button class="nav-btn" data-view="tasks">タスク</button>
     <button class="nav-btn" data-view="memory">記憶</button>
     <button class="nav-btn" data-view="logs">ログ</button>
     <button class="nav-btn" data-view="settings">設定</button>
@@ -917,6 +976,36 @@
           <button id="send-btn">送信</button>
         </div>
         <div class="hint" id="send-hint" style="display:none;">もう一度Enterで送信</div>
+      </div>
+    </div>
+
+    <!-- タスクビュー -->
+    <div class="view" id="tasks-view">
+      <div id="tasks-cols">
+        <div class="tasks-col" id="tasks-now-col">
+          <h2>いまやる <span class="tasks-count" id="tasks-now-count"></span></h2>
+          <div id="tasks-now-list"></div>
+          <div id="tasks-done-today">
+            <h3>今日の完了</h3>
+            <div id="tasks-done-list"></div>
+          </div>
+        </div>
+        <div class="tasks-col" id="tasks-future-col">
+          <h2>これから <span class="tasks-count" id="tasks-future-count"></span></h2>
+          <div id="tasks-future-list"></div>
+        </div>
+      </div>
+      <div id="tasks-add-bar">
+        <input type="text" id="task-add-text" placeholder="新しいタスク">
+        <input type="date" id="task-add-due" title="期限（任意）">
+        <input type="text" id="task-add-cat" placeholder="カテゴリ（任意）" list="task-cat-list">
+        <datalist id="task-cat-list"></datalist>
+        <select id="task-add-section">
+          <option value="now">いまやる</option>
+          <option value="future" selected>これから</option>
+        </select>
+        <button id="task-add-btn">追加</button>
+        <span class="hint" id="tasks-status"></span>
       </div>
     </div>
 
@@ -1616,6 +1705,7 @@ function renderMarkdownToHtml(raw) {
       $(name + "-view").classList.add("active");
       if (name === "memory") loadMemoryTree();
       if (name === "logs") loadLogTree();
+      if (name === "tasks") loadTasks();
       if (name === "settings") loadSettings();
       if (name !== "settings") stopOauthPolling();
       updateBootGuard();
@@ -1663,6 +1753,8 @@ function renderMarkdownToHtml(raw) {
     // （SOULメニュー等のswitch_soulハンドラ）は切替前にconfirmDiscardMemEditで
     // 未保存編集の破棄確認を済ませているため、ここでは無条件にリセットしてよい。
     loadMemoryTree();
+    // タスクビューも同じ理由（SOUL切替時に前SOULの一覧が残らない）でここで読み直す。
+    loadTasks();
 
     var soulObj = state.souls.find(function (s) { return s.id === state.active_soul; });
     $("soul-name-label").textContent = soulObj ? soulObj.name : "SOUL未選択";
@@ -3201,6 +3293,310 @@ function renderMarkdownToHtml(raw) {
       }
     });
   }
+
+  // --- タスクビュー ---
+  var TASKS_FUTURE_GROUPS = [
+    { key: "overdue", label: "期限切れ" },
+    { key: "week", label: "今週" },
+    { key: "month", label: "今月" },
+    { key: "later", label: "その先" },
+    { key: "none", label: "期限なし" },
+  ];
+
+  function loadTasks() {
+    window.pywebview.api.get_tasks().then(function (data) {
+      renderTasks(data);
+    }).catch(function (err) {
+      $("tasks-status").textContent = "タスクの読み込みに失敗した: " + err;
+    });
+  }
+
+  function renderTasks(data) {
+    $("tasks-now-list").innerHTML = "";
+    $("tasks-future-list").innerHTML = "";
+    $("tasks-done-list").innerHTML = "";
+    $("task-cat-list").innerHTML = "";
+    if (!data || !data.ok) {
+      $("tasks-now-count").textContent = "";
+      $("tasks-future-count").textContent = "";
+      var guard = document.createElement("div");
+      guard.className = "hint";
+      guard.textContent = "SOULが選ばれていない";
+      $("tasks-now-list").appendChild(guard);
+      return;
+    }
+    var now = data.now || [];
+    var future = data.future || [];
+    var doneToday = data.done_today || [];
+    $("tasks-now-count").textContent = "(" + now.length + ")";
+    $("tasks-future-count").textContent = "(" + future.length + ")";
+    renderTaskCategoryOptions(now.concat(future).concat(doneToday));
+    renderTasksNowList(now);
+    renderTasksFutureList(future);
+    renderTasksDoneList(doneToday);
+  }
+
+  function renderTaskCategoryOptions(tasks) {
+    var seen = {};
+    var list = $("task-cat-list");
+    tasks.forEach(function (t) {
+      if (t.category && !seen[t.category]) {
+        seen[t.category] = true;
+        var opt = document.createElement("option");
+        opt.value = t.category;
+        list.appendChild(opt);
+      }
+    });
+  }
+
+  function renderTasksNowList(now) {
+    var box = $("tasks-now-list");
+    if (!now.length) {
+      var empty = document.createElement("div");
+      empty.className = "hint";
+      empty.textContent = "いまやるタスクは無い";
+      box.appendChild(empty);
+      return;
+    }
+    now.forEach(function (t, i) {
+      box.appendChild(buildTaskRow(t, "now", i, "→ これからへ"));
+    });
+  }
+
+  // future列は期限までの日数でグループ化する。グループ内の並びは期限昇順、
+  // 期限なしグループだけはファイル順（=元配列の並び）のまま。
+  // task_move/task_delete/task_completeはtasks.md内の元インデックスで照合するため、
+  // グループ化の際も各タスクにforEachのiで得た元配列インデックスをitem.indexとして
+  // 保持し、それをそのままAPI呼び出しに渡す（表示順の並べ替えとAPI照合用indexを分離する）。
+  function taskFutureGroupKey(diff, hasDue) {
+    if (!hasDue) return "none";
+    if (diff < 0) return "overdue";
+    if (diff <= 7) return "week";
+    if (diff <= 31) return "month";
+    return "later";
+  }
+
+  function renderTasksFutureList(future) {
+    var box = $("tasks-future-list");
+    if (!future.length) {
+      var empty = document.createElement("div");
+      empty.className = "hint";
+      empty.textContent = "これからのタスクは無い";
+      box.appendChild(empty);
+      return;
+    }
+    var groups = {};
+    TASKS_FUTURE_GROUPS.forEach(function (g) { groups[g.key] = []; });
+    future.forEach(function (t, i) {
+      var diff = t.due ? daysDiffFromToday(t.due) : null;
+      var key = taskFutureGroupKey(diff, !!t.due);
+      groups[key].push({ task: t, index: i, diff: diff });
+    });
+    TASKS_FUTURE_GROUPS.forEach(function (g) {
+      var items = groups[g.key];
+      if (!items.length) return;
+      if (g.key !== "none") {
+        items.sort(function (a, b) { return a.diff - b.diff; });
+      }
+      var heading = document.createElement("h3");
+      heading.className = "tasks-group-heading";
+      heading.textContent = g.label + "（" + items.length + "）";
+      box.appendChild(heading);
+      items.forEach(function (item) {
+        box.appendChild(buildTaskRow(item.task, "future", item.index, "← いまやるへ"));
+      });
+    });
+  }
+
+  function renderTasksDoneList(doneToday) {
+    var box = $("tasks-done-list");
+    if (!doneToday.length) {
+      var empty = document.createElement("div");
+      empty.className = "hint";
+      empty.textContent = "今日完了したタスクは無い";
+      box.appendChild(empty);
+      return;
+    }
+    doneToday.forEach(function (t) {
+      var row = document.createElement("div");
+      row.className = "task-done-row";
+      row.title = "クリックで戻す";
+      var check = document.createElement("input");
+      check.type = "checkbox";
+      check.checked = true;
+      check.addEventListener("click", function (e) {
+        e.stopPropagation();
+        restoreTaskDone(t.text);
+      });
+      row.appendChild(check);
+      var textEl = document.createElement("span");
+      textEl.className = "task-done-text";
+      textEl.textContent = t.text;
+      row.appendChild(textEl);
+      if (t.category) row.appendChild(buildTaskCategoryChip(t.category));
+      row.addEventListener("click", function () {
+        restoreTaskDone(t.text);
+      });
+      box.appendChild(row);
+    });
+  }
+
+  function restoreTaskDone(text) {
+    window.pywebview.api.task_restore(text).then(function (result) {
+      handleTaskMutationResult(result);
+    }).catch(function (err) {
+      $("tasks-status").textContent = "復帰できなかった: " + err;
+      loadTasks();
+    });
+  }
+
+  // 変異系ブリッジ呼び出し後の共通後始末: ok:falseは照合失敗のリカバリ、
+  // ok:trueも他ビューからの変更を拾うため、どちらもloadTasksで再読込する。
+  function handleTaskMutationResult(result) {
+    $("tasks-status").textContent = (result && !result.ok) ? (result.error || "操作に失敗した") : "";
+    loadTasks();
+  }
+
+  function buildTaskRow(task, section, index, moveLabel) {
+    var row = document.createElement("div");
+    row.className = "task-row";
+
+    var main = document.createElement("div");
+    main.className = "task-main";
+    var textEl = document.createElement("span");
+    textEl.className = "task-text";
+    textEl.textContent = task.text;
+    main.appendChild(textEl);
+    if (task.category) main.appendChild(buildTaskCategoryChip(task.category));
+    if (task.due) main.appendChild(buildTaskDueBadge(task.due));
+    row.appendChild(main);
+
+    var actions = document.createElement("div");
+    actions.className = "task-actions";
+
+    if (section === "now") {
+      var check = document.createElement("input");
+      check.type = "checkbox";
+      check.className = "task-check";
+      check.title = "完了にする";
+      check.addEventListener("change", function () {
+        check.disabled = true;
+        window.pywebview.api.task_complete(section, index, task.text).then(function (result) {
+          handleTaskMutationResult(result);
+        }).catch(function (err) {
+          $("tasks-status").textContent = "完了にできなかった: " + err;
+          loadTasks();
+        });
+      });
+      actions.appendChild(check);
+    }
+
+    var moveBtn = document.createElement("button");
+    moveBtn.type = "button";
+    moveBtn.className = "task-move-btn";
+    moveBtn.textContent = moveLabel;
+    moveBtn.addEventListener("click", function () {
+      moveBtn.disabled = true;
+      window.pywebview.api.task_move(section, index, task.text).then(function (result) {
+        handleTaskMutationResult(result);
+      }).catch(function (err) {
+        $("tasks-status").textContent = "移動できなかった: " + err;
+        loadTasks();
+      });
+    });
+    actions.appendChild(moveBtn);
+
+    var delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "task-del-btn";
+    delBtn.textContent = "×";
+    delBtn.title = "削除";
+    delBtn.addEventListener("click", function () {
+      if (!window.confirm(task.text + " を削除しますか？（元に戻せません）")) return;
+      delBtn.disabled = true;
+      window.pywebview.api.task_delete(section, index, task.text).then(function (result) {
+        handleTaskMutationResult(result);
+      }).catch(function (err) {
+        $("tasks-status").textContent = "削除できなかった: " + err;
+        loadTasks();
+      });
+    });
+    actions.appendChild(delBtn);
+
+    row.appendChild(actions);
+    return row;
+  }
+
+  // 期限の年月日文字列同士をUTC起点の日数差で比較する（現地時刻のDST等に左右されないため）。
+  function daysDiffFromToday(dateStr) {
+    var t = todayStr().split("-");
+    var d = dateStr.split("-");
+    var todayUTC = Date.UTC(Number(t[0]), Number(t[1]) - 1, Number(t[2]));
+    var dueUTC = Date.UTC(Number(d[0]), Number(d[1]) - 1, Number(d[2]));
+    return Math.round((dueUTC - todayUTC) / 86400000);
+  }
+
+  function buildTaskDueBadge(due) {
+    var diff = daysDiffFromToday(due);
+    var parts = due.split("-");
+    var mdText = Number(parts[1]) + "/" + Number(parts[2]);
+    var relText;
+    if (diff < 0) relText = "期限切れ";
+    else if (diff === 0) relText = "今日";
+    else relText = "あと" + diff + "日";
+    var badge = document.createElement("span");
+    badge.className = "task-due" + (diff <= 3 ? " task-due-danger" : "");
+    badge.textContent = mdText + " " + relText;
+    return badge;
+  }
+
+  // カテゴリ文字列からhue(色相)を決定的に算出し、テーマの明暗に応じて
+  // 読める文字色を選ぶ（背景は低透明度のオーバーレイなので明暗どちらでも馴染む）。
+  function taskCategoryHue(cat) {
+    return Array.from(cat).reduce(function (a, c) { return a + c.codePointAt(0); }, 0) % 360;
+  }
+
+  function isLightTheme() {
+    var t = document.documentElement.dataset.theme;
+    return !t || t === "light" || t === "washi";
+  }
+
+  function buildTaskCategoryChip(cat) {
+    var hue = taskCategoryHue(cat);
+    var light = isLightTheme();
+    var chip = document.createElement("span");
+    chip.className = "task-chip";
+    chip.style.background = "hsl(" + hue + " 45% 50% / .18)";
+    chip.style.color = light ? "hsl(" + hue + " 55% 35%)" : "hsl(" + hue + " 65% 70%)";
+    chip.textContent = cat;
+    return chip;
+  }
+
+  $("task-add-btn").addEventListener("click", function () {
+    var text = $("task-add-text").value.trim();
+    if (!text) {
+      $("tasks-status").textContent = "内容を入力して";
+      return;
+    }
+    var due = $("task-add-due").value;
+    var category = $("task-add-cat").value.trim();
+    var section = $("task-add-section").value;
+    $("task-add-btn").disabled = true;
+    window.pywebview.api.task_add(section, text, due, category).then(function (result) {
+      $("task-add-btn").disabled = false;
+      if (result && result.ok) {
+        $("task-add-text").value = "";
+        $("task-add-due").value = "";
+        $("task-add-cat").value = "";
+      }
+      $("tasks-status").textContent = (result && !result.ok) ? (result.error || "追加に失敗した") : "";
+      loadTasks();
+    }).catch(function (err) {
+      $("task-add-btn").disabled = false;
+      $("tasks-status").textContent = "追加に失敗した: " + err;
+      loadTasks();
+    });
+  });
 
   // --- 右パネル ---
   function todayStr() {
