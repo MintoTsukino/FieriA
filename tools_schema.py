@@ -43,7 +43,10 @@ SCHEMAS = {
         "parameters": _p({"content": _s("全文")}, ["content"]),
     },
     "update_tasks": {
-        "description": "気にかけていること（ユーザーのタスク・懸案）を全文置換で書き直す",
+        "description": "ユーザーのタスクリスト（tasks.md）を全文置換で書き直す。書式: "
+                       "## いまやる / ## これから の2見出し＋1行1タスク"
+                       "「- 内容 ｜YYYY-MM-DD ｜カテゴリ」（期限・カテゴリ任意）。"
+                       "完了した行は消してよい（完了記録はアプリが残す）",
         "parameters": _p({"content": _s("全文")}, ["content"]),
     },
     "update_memory_index": {
