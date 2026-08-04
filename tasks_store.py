@@ -61,7 +61,7 @@ def parse_tasks(md):
 
     - ## いまやる → nowセクション。それ以外の##見出し → futureセクション
     - 見出しより前の行・#タイトル行の下の行はfuture扱い
-    - ✓を含む行は旧約束の済みタスク → legacy_doneへ生テキストで隔離
+    - ✓済マーカーまたは旧done行形式『✓ 内容』の行は旧約束の済みタスク → legacy_doneへ生テキストで隔離
     """
     now, future, legacy_done = [], [], []
     section = "future"
@@ -75,7 +75,8 @@ def parse_tasks(md):
             elif s.startswith("##"):
                 section = "future"
             continue
-        if "✓" in s:
+        # legacy_done判定：「✓済」マーカー、または行頭記号剥後が「✓ 」で始まる旧done行形式
+        if "✓済" in s or _strip_bullet(s).startswith("✓ "):
             legacy_done.append(_strip_bullet(s))
             continue
         t = parse_line(line)

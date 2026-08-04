@@ -231,3 +231,12 @@ def test_migrate_legacy_multiple_lines():
     assert n == 2
     assert "A（✓済）" in new_done and "B ✓済 2026-07-01" in new_done
     assert [t["text"] for t in ts.parse_tasks(new_md)["future"]] == ["残るタスク"]
+
+
+def test_checkmark_in_task_text_is_not_legacy_done():
+    """本文に✓を含むだけの進行中タスクはlegacy_doneに隔離しない
+    （隔離するのは旧約束の『✓済』マーカーと旧done行形式『✓ 内容』だけ）"""
+    d = ts.parse_tasks("## いまやる\n- ✓マークの実装\n- レビューで✓をもらう\n"
+                       "- 済んだやつ（✓済 2026-07-20）\n- ✓ 旧done行形式\n")
+    assert [t["text"] for t in d["now"]] == ["✓マークの実装", "レビューで✓をもらう"]
+    assert len(d["legacy_done"]) == 2
