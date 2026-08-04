@@ -566,6 +566,20 @@ def test_tools_spec_documents_update_tasks():
     assert "update_tasks" in mt.TOOLS_SPEC
 
 
+def test_update_tasks_spec_teaches_template():
+    """ツール説明がタスクタブの書式契約（見出し2つ・1行書式・完了は行ごと消す）を
+    教えていること。旧約束『✓済で残す』が残っていないこと（3箇所すべて）。"""
+    import memory_tools as mt
+    import tools_schema
+    spec_texts = [mt.TOOLS_SPEC, mt._TOOL_ONELINERS["update_tasks"],
+                  mt._TOOL_DETAILS["update_tasks"],
+                  tools_schema.SCHEMAS["update_tasks"]["description"]]
+    for text in spec_texts:
+        assert "✓済" not in text
+    for text in spec_texts[1:]:
+        assert "いまやる" in text and "これから" in text
+
+
 # --- switch_role（AIによるロール自動切替・2026-07-22追加）---
 
 def test_switch_role_updates_cfg_and_persists_config():
