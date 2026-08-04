@@ -2916,3 +2916,22 @@ def test_task_restore_returns_to_now():
     assert b.task_restore("ゲラ戻し")["ok"] is True
     assert "- ゲラ戻し" in soul.read_file(sid, "tasks.md")
     assert b.task_restore("存在しない行")["ok"] is False
+
+
+def test_task_move_rejects_non_numeric_index():
+    """indexはJS由来の値なので型を確定させる。数値化できない値は
+    生トレースバックを返さずok:Falseで弾く（レビュー指摘Important-1）"""
+    b, _sid = _task_bridge()
+    assert b.task_move("now", "abc", "X")["ok"] is False
+
+
+def test_task_mutation_failure_still_writes_migration():
+    """照合失敗（ok:False）でも、済ませたレガシー✓行の移行だけは書き込まれる
+    （移行は冪等・「削除ではなく移動」の退避を失敗経路でも取りこぼさない）"""
+    import soul
+    b, sid = _task_bridge()
+    soul.write_file(sid, "tasks.md", "- 原稿（✓済 2026-07-20）\n- 買い物\n")
+    r = b.task_move("now", 0, "存在しないタスク")
+    assert r["ok"] is False
+    assert "✓" not in soul.read_file(sid, "tasks.md")
+    assert "原稿（✓済 2026-07-20）" in soul.read_file(sid, "tasks_done.md")

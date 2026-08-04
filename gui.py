@@ -1100,7 +1100,8 @@ class Bridge:
         today = datetime.date.today().isoformat()
         done = tasks_store.parse_done(soul_mod.read_file(sid, "tasks_done.md"))
         return {"ok": True, "now": data["now"], "future": data["future"],
-                "done_today": [d for d in done if d["date"] == today]}
+                "done_today": [{"text": d["text"], "category": d["category"]}
+                               for d in done if d["date"] == today]}
 
     def _task_mutate(self, op):
         """変異系ブリッジの共通枠: ゲート→レガシー移行→op→書き込み。
@@ -1144,19 +1145,34 @@ class Bridge:
                                                      (category or "").strip() or None), dm))
 
     def task_move(self, section, index, text):
+        try:
+            index = int(index)
+        except (TypeError, ValueError):
+            # indexはJS由来の値なので型を確定させる（auto_recall.max_hits等と同じ慣習）
+            return {"ok": False, "error": "不正な引数"}
         return self._task_mutate(
             lambda md, dm, _t: (lambda r: None if r is None else (r, dm))(
-                tasks_store.move_task(md, section, int(index), text)))
+                tasks_store.move_task(md, section, index, text)))
 
     def task_delete(self, section, index, text):
+        try:
+            index = int(index)
+        except (TypeError, ValueError):
+            # indexはJS由来の値なので型を確定させる（auto_recall.max_hits等と同じ慣習）
+            return {"ok": False, "error": "不正な引数"}
         return self._task_mutate(
             lambda md, dm, _t: (lambda r: None if r is None else (r, dm))(
-                tasks_store.delete_task(md, section, int(index), text)))
+                tasks_store.delete_task(md, section, index, text)))
 
     def task_complete(self, section, index, text):
+        try:
+            index = int(index)
+        except (TypeError, ValueError):
+            # indexはJS由来の値なので型を確定させる（auto_recall.max_hits等と同じ慣習）
+            return {"ok": False, "error": "不正な引数"}
         return self._task_mutate(
             lambda md, dm, t: tasks_store.complete_task(md, dm, section,
-                                                        int(index), text, t))
+                                                        index, text, t))
 
     def task_restore(self, text):
         return self._task_mutate(
