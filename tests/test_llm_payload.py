@@ -102,6 +102,46 @@ def test_gemini_explicit_arg_wins_over_unlimited_instance(monkeypatch):
     assert captured["payload"]["generationConfig"]["maxOutputTokens"] == 500
 
 
+# --- Gemini思考量: 2.5系はthinkingBudget、3系以降はthinkingLevel＋temperature無し ---
+
+def _gemini_gen_config(monkeypatch, model, effort):
+    captured = {"response": _gemini_response()}
+    _capture_post(monkeypatch, captured)
+    provider = llm.GeminiLLM({"model": model}, api_key="k", temperature=0.8,
+                             max_tokens=0, reasoning_effort=effort)
+    provider.chat([{"role": "user", "content": "hi"}])
+    return captured["payload"]["generationConfig"]
+
+
+def test_gemini_25_keeps_thinking_budget_and_temperature(monkeypatch):
+    cfg = _gemini_gen_config(monkeypatch, "gemini-2.5-flash", "medium")
+    assert cfg["thinkingConfig"] == {"thinkingBudget": 2048}
+    assert cfg["temperature"] == 0.8
+
+
+def test_gemini_3_uses_thinking_level_without_temperature(monkeypatch):
+    cfg = _gemini_gen_config(monkeypatch, "gemini-3.8-flash", "high")
+    assert cfg["thinkingConfig"] == {"thinkingLevel": "high"}
+    assert "temperature" not in cfg
+
+
+def test_gemini_3_without_effort_sends_no_thinking_config(monkeypatch):
+    cfg = _gemini_gen_config(monkeypatch, "gemini-3.1-pro-preview", "")
+    assert "thinkingConfig" not in cfg
+    assert "temperature" not in cfg
+
+
+def test_gemini_uses_thinking_level_detection():
+    assert llm._gemini_uses_thinking_level("gemini-3-flash-preview")
+    assert llm._gemini_uses_thinking_level("models/gemini-3.8-flash")
+    assert llm._gemini_uses_thinking_level("gemini-10.0-pro")
+    assert llm._gemini_uses_thinking_level("gemini-flash-latest")
+    assert not llm._gemini_uses_thinking_level("gemini-2.5-flash")
+    assert not llm._gemini_uses_thinking_level("gemini-2.0-flash")
+    assert not llm._gemini_uses_thinking_level("gemma-3-27b-it")
+    assert not llm._gemini_uses_thinking_level("")
+
+
 # --- プロバイダentry別のreasoning_effort解決とCodexへのreasoning配線 ---
 
 def test_create_llm_uses_entry_level_reasoning_effort():

@@ -21,6 +21,7 @@ APIキーは .env から解決する（env.resolve_api_key）。
 """
 
 import json
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -443,6 +444,23 @@ class OpenAICompatLLM(_ChatStreamFallbackMixin):
 # （2026-07-07時点、実測はしていない・要検証の値）。
 _GEMINI_THINKING_BUDGET = {"low": 0, "medium": 2048, "high": 8192}
 
+# Gemini 3系以降は思考量を thinkingLevel（"low"/"medium"/"high"の文字列）で指定する。
+# thinkingBudget は今後のモデルで400になり、temperature/top_p/top_k も非推奨
+# （2026-10-06 Google告知・2026-07-21 changelog）。2.5系は逆に thinkingLevel 非対応。
+_GEMINI_MAJOR_RE = re.compile(r"^(?:models/)?gemini-(\d+)")
+_GEMINI_LATEST_ALIAS_RE = re.compile(r"^(?:models/)?gemini-[a-z-]*-latest$")
+
+
+def _gemini_uses_thinking_level(model):
+    """モデル名からthinkingLevel方式（3系以降）かを判定する。gemini-<数字>で
+    数字が3以上、または常に最新を指す gemini-*-latest エイリアスならTrue。
+    2.x系・gemma等・判定できない名前は従来通り（thinkingBudget＋temperature）。"""
+    name = (model or "").strip().lower()
+    m = _GEMINI_MAJOR_RE.match(name)
+    if m:
+        return int(m.group(1)) >= 3
+    return bool(_GEMINI_LATEST_ALIAS_RE.match(name))
+
 REASONING_EFFORTS = ("", "low", "medium", "high")
 
 # FieriA拡張: Web検索（Gemini Google Search grounding）
@@ -558,12 +576,14 @@ class GeminiLLM(_ChatStreamFallbackMixin):
                     parts.append({"inline_data": {
                         "mime_type": img["mime"], "data": img["b64"]}})
                 contents.append({"role": role, "parts": parts})
+        new_style = _gemini_uses_thinking_level(self.model)
         payload = {
             "contents": contents,
-            "generationConfig": {
-                "temperature": self.temperature,
-            },
+            "generationConfig": {},
         }
+        # 3系以降はtemperatureが非推奨（送るとエラーになるモデルが出てくる）ので送らない
+        if not new_style:
+            payload["generationConfig"]["temperature"] = self.temperature
         # FieriA拡張: max_tokens=0でモデル既定に任せる（NikoVoice版からの分岐点）
         # 明示引数（wrapup等）はインスタンス設定より優先。実効値が0以下/Noneなら
         # "maxOutputTokens"キー自体を送らず、モデル側の既定上限に任せる。
@@ -571,9 +591,11 @@ class GeminiLLM(_ChatStreamFallbackMixin):
         if effective_max_tokens and int(effective_max_tokens) > 0:
             payload["generationConfig"]["maxOutputTokens"] = int(effective_max_tokens)
         if self.reasoning_effort in _GEMINI_THINKING_BUDGET:
-            payload["generationConfig"]["thinkingConfig"] = {
-                "thinkingBudget": _GEMINI_THINKING_BUDGET[self.reasoning_effort]
-            }
+            if new_style:
+                thinking = {"thinkingLevel": self.reasoning_effort}
+            else:
+                thinking = {"thinkingBudget": _GEMINI_THINKING_BUDGET[self.reasoning_effort]}
+            payload["generationConfig"]["thinkingConfig"] = thinking
         if system_parts:
             payload["systemInstruction"] = {"parts": [{"text": "\n\n".join(system_parts)}]}
         # FieriA拡張: Web検索。google_searchツールを足すだけでGeminiが必要に応じて
