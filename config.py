@@ -104,7 +104,7 @@ def migrate_secret_file(old_dir, filename):
         return old_path
 
 
-# NikoVoice(core.py)から輸入した全プロバイダー定義。値は一字も変えない。
+# NikoVoice由来のプロバイダー定義と、FieriAで追加した公式API接続。
 DEFAULT_LLM_PROVIDERS = {
     "ollama": {
         "type": "openai_compat",
@@ -128,6 +128,12 @@ DEFAULT_LLM_PROVIDERS = {
         "type": "gemini",
         "model": "gemini-2.5-flash",
         "env_key": "GEMINI_API_KEY",
+    },
+    "anthropic": {
+        "type": "anthropic",
+        "model": "claude-sonnet-5-5",
+        "env_key": "ANTHROPIC_API_KEY",
+        "reasoning_effort": "medium",
     },
     "deepseek": {
         # 公式APIはbase_urlに/v1を付けない
@@ -178,6 +184,7 @@ PROVIDER_LABELS = {
     "opencode_go": "OpenCode Go（$10/月 定額）",
     "opencode_zen": "OpenCode Zen（従量・プレミアム）",
     "gemini": "Gemini（Google AI Studio）",
+    "anthropic": "Claude（Anthropic公式API）",
     "deepseek": "DeepSeek（公式API）",
     "xai_oauth": "Grok（X Premium+/SuperGrokでログイン）",
     "openrouter": "OpenRouter（多数のモデルを1キーで横断）",
@@ -198,17 +205,18 @@ DEFAULT_CONFIG = {
         # （空ならフォールバック先プロバイダの既定モデルを使う）。
         "fallback_provider": "",
         "fallback_model": "",
-        # FieriA拡張: Web検索。プロバイダ組み込みの検索機能（Gemini: Google Search
-        # grounding / Grok: Live Search）を使うかのグローバルトグル。プロバイダごとの
-        # providers[name]エントリではなく、この階層（llm直下）に置く——temperature等と
-        # 同じく「今使っているプロバイダに対する挙動設定」だからで、対応外プロバイダ
-        # （openai_compat等）では単に無視される（llm.create_llm/build_provider参照）。
-        # 課金が絡みうるため既定OFF（オプトイン）。
+        # 確認付きWeb検索の有効/無効。検索先はweb_search_backendで選ぶ。
+        # Gemini検索では追加のAPI利用料がかかりうるため既定OFF。
         "web_search": False,
+        # auto: 会話モデルがGeminiならそのモデルで検索、それ以外は内蔵検索。
+        # gemini: 標準のGemini設定を検索担当として使う。
+        "web_search_backend": "auto",
         "providers": copy.deepcopy(DEFAULT_LLM_PROVIDERS),
     },
     "active_soul": None,
     "active_role": None,
+    # 明示的にautoを選んだ種類だけ、操作ごとの確認を省略する。
+    "tool_approvals": {"workspace_write": "ask", "web_search": "ask"},
     # SOULごとのLLMプロバイダ紐付け（2026-08-03）。{soul_id: {"provider": <name>}}。
     # SOULフォルダ（記憶の聖域）ではなくconfig側で持つ——プロバイダ名はこの環境の
     # config固有概念のため。紐付け無しのSOULは従来どおりグローバルllm設定を使う
@@ -307,6 +315,21 @@ DEFAULT_CONFIG = {
         "speaker": 0,
         "speed": 1.0,
     },
+    # マイクは「電話する」でのみ開始する。音声認識はローカルのwhisper.cpp。
+    "call": {
+        "stt_dir": "",
+        "stt_model": "ggml-large-v3-turbo.bin",
+        "threads": 8,
+        "hands_free": True,
+        "silence_seconds": 1.2,
+        "silence_threshold": 0.02,
+        "max_record_seconds": 120,
+        "input_device": None,
+        "output_device": None,
+        "input_gain": 1.0,
+        "voice": "existing",  # 既存のAivis/VOICEVOX設定。失敗時はWindows音声。
+        "soul_speakers": {},  # {soul_id: style_id}。未指定は共通のtts.speaker。
+    },
     # セマンティック検索（連想記憶のハイブリッド化・embed.py参照）。既定OFF（Ollama未導入
     # ユーザーが大半のため。ONでもOllama不達なら従来の字面検索のみへ静かにフォールバックする）。
     # engine_urlはOllama既定。modelはみんとちゃん選定2026-08-03（実測形式確認済み）。
@@ -367,6 +390,10 @@ def load_config():
     for key, value in DEFAULT_CONFIG["tts"].items():
         if key not in cfg["tts"]:
             cfg["tts"][key] = value
+            changed = True
+    for key, value in DEFAULT_CONFIG["call"].items():
+        if key not in cfg["call"]:
+            cfg["call"][key] = copy.deepcopy(value)
             changed = True
     # embeddingも同様のフィールド単位補完（tts/auto_recallと同じ入れ子補完パターン）。
     cfg.setdefault("embedding", {})

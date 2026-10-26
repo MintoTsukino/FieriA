@@ -406,6 +406,7 @@ class Scheduler:
         # ため、読み書きともロックで保護する。
         self._running_lock = threading.Lock()
         self._running_job = False
+        self._call_hold = False
 
     def start(self, get_context, is_busy=None, on_job_change=None):
         """get_context: () -> (cfg, llm, soul_id or None)
@@ -456,8 +457,10 @@ class Scheduler:
         job = self._next_due_job(scheduled, hours, today, now.hour, soul_id)
         if job is None:
             return None
-        self._last_run_dates[(job["id"], soul_id)] = today
         with self._running_lock:
+            if self._call_hold or self._running_job:
+                return None
+            self._last_run_dates[(job["id"], soul_id)] = today
             self._running_job = True
             self._running_job_name = job["name"]
         self._notify_job_change(job["name"])
@@ -517,6 +520,18 @@ class Scheduler:
             return {}
         return {job_id: info for (job_id, sid), info in self._job_runs.items()
                 if sid == soul_id}
+
+    def reserve_for_call(self):
+        """Atomically exclude scheduled memory writes for a phone session."""
+        with self._running_lock:
+            if self._running_job or self._call_hold:
+                return False
+            self._call_hold = True
+            return True
+
+    def release_call(self):
+        with self._running_lock:
+            self._call_hold = False
 
     def running_job_name(self):
         """実行中ジョブの表示名（idle時は""）。gui.send_messageが「いま○○を書いとる」と

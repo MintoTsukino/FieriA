@@ -23,6 +23,7 @@ EXCLUDE_TOP = {
     ".env", "fieria_home", ".git", ".gitignore", ".superpowers", "tests", "docs",
     "__pycache__", "build_dist.py", "build_exe.py", "fieria.spec",
     ".pytest_cache", "build", "dist",
+    ".venv", ".audit-cache", ".voicevox-player-cache",
     # NikoVoiceと同じく、ログイン時に生成されうる生トークンファイル。現時点では
     # 存在しないが、将来生成された場合に混入させないため防御的に除外する
     "xai_oauth.json", "openai_codex_oauth.json",

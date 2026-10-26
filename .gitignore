@@ -1,4 +1,5 @@
 .env
+.env.*
 fieria_home/
 __pycache__/
 *.pyc
@@ -7,3 +8,5 @@ xai_oauth.json
 openai_codex_oauth.json
 build/
 dist/
+.venv/
+.audit-cache/

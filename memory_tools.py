@@ -16,6 +16,7 @@ import roles as roles_mod
 import soul as soul_mod
 import websearch
 import workspace as workspace_mod
+import tool_permissions
 
 # LLMへ結果を差し戻して再応答させる（他ターンで終わらせない）ツールの集合。
 # engine.pyのツールループがこれを見てread_results相当の差し戻しをするかどうか決める。
@@ -363,10 +364,8 @@ def build_tools_spec(cfg, soul_id=None):
                          "\n".join(_TOOL_ONELINERS[n] for n in _ROLE_TOOL_NAMES) +
                          "\n\n" + _roles_index_block())
         sections.append(role_section)
-    # アプリ内蔵web_searchツールは、ネイティブWeb検索を持つプロバイダには注入しない。
-    # gemini: Google Search grounding。openai_codex_oauth: Responses APIの組み込み
-    # tools:[{"type":"web_search"}]（2026-08-02にネイティブ切替、llm.CodexOAuthLLM参照）。
-    if (cfg.get("llm") or {}).get("web_search") and _current_llm_type(cfg) not in ("gemini", "openai_codex_oauth"):
+    # 全プロバイダで、検索語を送信前に確認できるアプリ内蔵検索を使う。
+    if (cfg.get("llm") or {}).get("web_search"):
         sections.append("## Web検索\n" + _TOOL_ONELINERS["web_search"])
     sections.append(_skills_index_block(soul_id, cfg))
     sections.append(_INDEX_FOOTER)
@@ -409,8 +408,7 @@ def build_native_tools(cfg, soul_id=None):
         names += _NATIVE_WORKSPACE_TOOLS
     if cfg.get("auto_role_switch", False):
         names += _NATIVE_ROLE_TOOLS
-    if (cfg.get("llm") or {}).get("web_search") and _current_llm_type(cfg) not in (
-            "gemini", "openai_codex_oauth"):
+    if (cfg.get("llm") or {}).get("web_search"):
         names.append("web_search")
     return [tools_schema.openai_tool_def(n) for n in names]
 
@@ -696,7 +694,7 @@ def _extract_bare_calls(text):
     return "".join(parts), calls
 
 
-def execute(soul_id, call, cfg=None):
+def execute(soul_id, call, cfg=None, approve=None, search_plan_factory=None, is_cancelled=None):
     if not isinstance(call, dict):
         return {"ok": False, "op": "(不明)", "detail": "ツール呼び出しがオブジェクト形式でない"}
     tool = call.get("tool", "")
@@ -723,11 +721,13 @@ def execute(soul_id, call, cfg=None):
                 return {"ok": True, "op": tool,
                         "detail": body if body else "（ファイルが存在しないか空）"}
             if tool == "write_doc":
-                workspace_mod.write_doc(workspace_dir, call["path"], call["content"])
-                return _ok(tool, f"{call['path']} に書き込み")
+                detail = tool_permissions.write_document(
+                    workspace_dir, call["path"], call["content"], "write", approve, cfg, is_cancelled)
+                return _ok(tool, detail)
             if tool == "append_doc":
-                workspace_mod.append_doc(workspace_dir, call["path"], call["content"])
-                return _ok(tool, f"{call['path']} に追記")
+                detail = tool_permissions.write_document(
+                    workspace_dir, call["path"], call["content"], "append", approve, cfg, is_cancelled)
+                return _ok(tool, detail)
             if tool == "read_pdf":
                 mode = call.get("mode") or "image"
                 if mode == "text":
@@ -895,10 +895,17 @@ def execute(soul_id, call, cfg=None):
             label = result if result else "（未設定に戻した）"
             return _ok(tool, f"名前を『{label}』に設定した")
         if tool == "web_search":
-            res = websearch.search_text(call.get("query", ""))
+            if not ((cfg or {}).get("llm") or {}).get("web_search", False):
+                return {"ok": False, "op": tool, "detail": "Web検索は設定でOFFのため実行できません"}
+            plan = (search_plan_factory() if search_plan_factory else
+                    websearch.make_search_plan((cfg or {}).get("llm", {}), {}))
+            query = tool_permissions.approve_search(
+                cfg, call.get("query", ""), approve, plan.label, plan.note, is_cancelled)
+            res = plan.run(query)
             if not res["ok"]:
                 return {"ok": False, "op": tool, "detail": res["detail"]}
-            detail = websearch.format_results(res["results"]) if res["results"] else "検索結果0件"
+            detail = res.get("answer") or (
+                websearch.format_results(res["results"]) if res["results"] else "検索結果0件")
             return {"ok": True, "op": tool, "detail": detail}
         return {"ok": False, "op": tool or "(不明)", "detail": "未知のツール"}
     except Exception as e:

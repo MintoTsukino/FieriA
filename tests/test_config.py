@@ -225,11 +225,11 @@ def test_home_respects_env_var():
     assert config.HOME == os.environ["FIERIA_HOME"]
 
 
-def test_default_config_has_all_ten_providers():
+def test_default_config_has_all_eleven_providers():
     config = _fresh_config()
     expected = {
         "ollama", "opencode_go", "opencode_zen", "gemini", "deepseek",
-        "xai_oauth", "openrouter", "openai_codex_oauth", "groq", "custom",
+        "xai_oauth", "openrouter", "openai_codex_oauth", "groq", "custom", "anthropic",
     }
     assert set(config.DEFAULT_CONFIG["llm"]["providers"].keys()) == expected
     assert set(config.DEFAULT_LLM_PROVIDERS.keys()) == expected

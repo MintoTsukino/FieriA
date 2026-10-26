@@ -1632,7 +1632,7 @@ def test_tts_speak_disabled_returns_ok_false_without_starting_thread():
     bridge._cfg["tts"] = {"enabled": False, "engine_url": "http://x", "speaker": 0, "speed": 1.0}
     calls = []
 
-    def fake_speak(cfg_tts, text):
+    def fake_speak(cfg_tts, text, cancelled=None):
         calls.append((cfg_tts, text))
 
     import tts as tts_mod
@@ -1660,7 +1660,7 @@ def test_tts_speak_enabled_passes_current_tts_cfg_and_text_via_thread():
     calls = []
     done = threading.Event()
 
-    def fake_speak(cfg_tts, text):
+    def fake_speak(cfg_tts, text, cancelled=None):
         calls.append((cfg_tts, text))
         done.set()
 
@@ -2235,7 +2235,8 @@ def test_maybe_wrapup_skipped_by_default(monkeypatch):
     b = gui.Bridge()
     sid = soul.create_soul("即時日記既定OFFテスト")
     b._cfg["active_soul"] = sid
-    b._engine = object()
+    from types import SimpleNamespace
+    b._engine = SimpleNamespace(request_stop=lambda: None)
     b._llm = object()
 
     b.end_session()
@@ -2251,7 +2252,8 @@ def test_maybe_wrapup_runs_when_enabled(monkeypatch):
     sid = soul.create_soul("即時日記ONテスト")
     b._cfg["active_soul"] = sid
     b._cfg["wrapup_on_close"] = True
-    b._engine = object()
+    from types import SimpleNamespace
+    b._engine = SimpleNamespace(request_stop=lambda: None)
     b._llm = object()
 
     b.end_session()

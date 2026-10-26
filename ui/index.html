@@ -922,6 +922,18 @@
       animation: none;
     }
   }
+  #phone-overlay { position:fixed; inset:0; z-index:1200; background:var(--overlay); display:none; align-items:center; justify-content:center; padding:24px; }
+  #phone-overlay.open { display:flex; }
+  #phone-panel { width:650px; max-width:100%; max-height:92vh; overflow:auto; display:flex; flex-direction:column; padding:26px; background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:var(--card-radius); box-shadow:var(--shadow); }
+  #phone-name { font-size:24px; margin:0 0 8px; }
+  #phone-status { color:var(--fg-dim); margin-bottom:14px; }
+  #phone-transcript { min-height:120px; height:32vh; overflow:auto; border-block:1px solid var(--line); padding:12px 0; }
+  .phone-line { white-space:pre-wrap; overflow-wrap:anywhere; padding:7px 10px; margin:5px 0; border-radius:8px; background:var(--bg2); }
+  #phone-notice { min-height:24px; padding:10px 0; font-size:13px; }
+  #phone-controls { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; }
+  #phone-hangup { background:var(--danger); color:white; border-color:var(--danger); }
+  #phone-text-row { display:flex; gap:8px; }
+  #phone-text { flex:1; min-width:0; }
 </style>
 
 <div id="app">
@@ -945,6 +957,7 @@
         <button id="compact-btn" title="長くなった会話の古い部分を要約に畳む（話の流れは要約として残る）">圧縮</button>
         <button id="break-btn" title="ここまでの文脈をリセットする（会話はログに残る）">区切り</button>
         <button id="side-toggle-btn" title="サイドバーを開閉">▸</button>
+        <button id="phone-start-btn" title="選択中のSOULへ電話する">📞 電話する</button>
       </div>
       <div id="chat-log"></div>
       <div id="pet-widget" class="pet-idle pet-hidden" aria-hidden="true" title="コノハ">
@@ -1036,6 +1049,7 @@
         <button class="settings-tab-btn" data-tab="model">モデル</button>
         <button class="settings-tab-btn" data-tab="memory">記憶</button>
         <button class="settings-tab-btn" data-tab="display">画面と音</button>
+        <button class="settings-tab-btn" data-tab="call">通話</button>
       </div>
 
       <div class="settings-pane active" data-pane="soul">
@@ -1180,7 +1194,7 @@
           <input type="checkbox" id="provider-maxtokens-unlimited">
           <label style="min-width:auto;">モデルに任せる（上限を指定しない）</label>
         </div>
-        <div class="hint">ONにすると上限を指定せず、モデルの既定上限まで書けます</div>
+        <div class="hint">ONにするとモデルの既定上限まで書けます。Claude公式APIでは取得した最大出力上限を指定します</div>
         <div class="hint">1回の返信の長さの上限。長文（記事執筆など）は8192以上推奨。暴走時の保険を兼ねるため空にはできない</div>
         <div class="row">
           <label>日記の最大トークン</label>
@@ -1204,9 +1218,28 @@
 
         <div class="toggle-row" style="margin-top:12px;">
           <input type="checkbox" id="web-search-checkbox">
-          <label style="min-width:auto;">Web検索を許可（Gemini: Google検索グラウンディング / Grok: Live Search）</label>
+          <label style="min-width:auto;">Web検索を有効にする</label>
         </div>
-        <div class="hint">※プロバイダ側で検索ごとの課金が発生しうる（Geminiは無料枠超過後に従量課金）。既定OFF。対応外のプロバイダ（Ollama等）では無視される</div>
+        <div class="row">
+          <label for="web-search-backend">検索方法</label>
+          <select id="web-search-backend">
+            <option value="auto">自動（Geminiとの会話はGemini検索、それ以外は内蔵検索）</option>
+            <option value="builtin">アプリ内蔵検索（APIキー不要）</option>
+            <option value="gemini">Gemini検索（Gemini設定のモデル・APIキーを使用）</option>
+          </select>
+        </div>
+        <div class="hint">既定では送信前に確認します。Gemini検索には追加のAPI利用料がかかる場合があります。会話履歴や記憶は検索担当に送りません。</div>
+
+        <h4>確認なしの自動実行</h4>
+        <div class="toggle-row">
+          <input type="checkbox" id="auto-workspace-write">
+          <label for="auto-workspace-write" style="min-width:auto;">作業文書の作成・上書き・追記を自動で実行する</label>
+        </div>
+        <div class="toggle-row">
+          <input type="checkbox" id="auto-web-search">
+          <label for="auto-web-search" style="min-width:auto;">Web検索を確認なしで実行する</label>
+        </div>
+        <div class="hint">ONにした操作は、AIの判断で文書を変更・検索依頼を外部送信します。検索の自動実行には上の「Web検索を有効にする」も必要です。作業フォルダの範囲制限はそのまま有効です。</div>
 
         <h4>フォールバック</h4>
         <div class="row">
@@ -1273,6 +1306,28 @@
 
       </div>
 
+      <div class="settings-pane" data-pane="call">
+        <div class="card">
+          <h3>電話・音声認識</h3>
+          <div class="hint" id="call-stt-status">音声認識は自動で準備する。</div>
+          <div class="row"><label>認識フォルダ</label><input id="call-stt-dir" type="text" placeholder="空欄で自動検出・必要なら取得"><button id="call-pick-stt" class="ghost">選ぶ</button><button id="call-auto-stt" class="ghost">自動に戻す</button></div>
+          <div class="hint">通常は空欄のままでOK。既存のニコボイスを自動検出し、なければ電話開始時に公式配布から約1.6GBを取得する。準備中も「切る」で中止できる。音声はPC内で文字起こしし、認識した文字を会話AIへ送る。</div>
+          <div class="row"><label>モデルファイル</label><input id="call-stt-model" type="text" list="call-stt-models"><datalist id="call-stt-models"></datalist></div>
+          <div class="row"><label>認識スレッド数</label><input id="call-threads" type="number" min="1" max="32"></div>
+          <div class="toggle-row"><input id="call-hands-free" type="checkbox"><label style="min-width:auto;">ハンズフリー（話して、黙ると送信）</label></div>
+          <div class="row"><label>無音で送信するまで</label><input id="call-silence" type="number" min="0.4" max="8" step="0.1"><span>秒</span></div>
+          <div class="row"><label>声の検出しきい値</label><input id="call-threshold" type="number" min="0.001" max="0.5" step="0.001"></div>
+          <div class="hint">声を拾わないときはしきい値を下げる。環境音を拾うときは上げる。相手が話し終わってから録音を再開する。</div>
+          <div class="row"><label>マイク</label><select id="call-input-device"><option value="">Windowsの既定</option></select></div>
+          <div class="row"><label>スピーカー</label><select id="call-output-device"><option value="">Windowsの既定</option></select><button id="call-devices-btn" class="ghost">一覧を取得</button></div>
+          <div class="row"><label>マイク音量倍率</label><input id="call-gain" type="number" min="0.1" max="5" step="0.1"></div>
+          <div class="row"><label>通話の声</label><select id="call-voice"><option value="existing">画面と音のAivisSpeech／VOICEVOX設定を使う</option><option value="system">Windows内蔵音声</option></select></div>
+          <div class="hint">通話中は通常の読み上げON/OFFに関係なく声で返す。音声エンジンが使えないときはWindows音声へ切り替える。</div>
+          <div class="row"><label>SOUL別の話者</label><select id="call-voice-soul"></select><input id="call-soul-speaker" type="number" min="0" placeholder="空欄＝共通設定"></div>
+          <div class="hint">AivisSpeech／VOICEVOXの話者IDを指定。話者名とIDは「画面と音」の「話者を取得」で確認できる。</div>
+          <button id="call-save-settings">通話設定を保存</button><div class="hint" id="call-settings-status"></div>
+        </div>
+      </div>
       <div class="settings-pane" data-pane="memory">
       <div class="card" id="workspace-card">
         <h3>作業フォルダ</h3>
@@ -1492,11 +1547,96 @@
   </div>
 </div>
 
+<div id="phone-overlay" role="dialog" aria-modal="true" aria-labelledby="phone-name">
+  <div id="phone-panel">
+    <h2 id="phone-name">電話</h2><div id="phone-status" role="status">呼び出し中…</div>
+    <div id="phone-transcript" role="log" aria-label="通話の文字表示"></div>
+    <div id="phone-notice" role="status"></div>
+    <progress id="phone-setup-progress" max="100" value="0" aria-label="音声認識の準備" style="width:100%;display:none;"></progress>
+    <div id="phone-controls">
+      <button id="phone-record">🎙 録音・送信（F8）</button>
+      <button id="phone-mic-mute" class="ghost">マイクON</button>
+      <button id="phone-speaker-mute" class="ghost">相手の声ON</button>
+      <button id="phone-hangup">📵 切る</button>
+      <button id="phone-close" class="ghost" style="display:none;">閉じる</button>
+    </div>
+    <div id="phone-share" style="border:1px solid var(--line);border-radius:8px;padding:10px;margin:10px 0;flex-shrink:0;">
+      <div id="phone-share-status" role="status">画面共有OFF</div>
+      <div class="row" style="flex-wrap:wrap;margin:6px 0;">
+        <select id="phone-share-window" aria-label="共有するウィンドウ" style="max-width:100%;flex:1;min-width:140px;"><option value="">共有する窓を選ぶ</option></select>
+        <button id="phone-share-refresh" class="ghost">窓の一覧を更新</button>
+      </div>
+      <div class="row" style="flex-wrap:wrap;">
+        <button id="phone-share-every" class="ghost">毎発言に添付</button>
+        <button id="phone-share-once" class="ghost">次の発言だけ</button>
+        <button id="phone-share-off" class="ghost">共有OFF</button>
+      </div>
+      <figure id="phone-share-preview" style="display:none;margin:8px 0 0;">
+        <img id="phone-share-image" alt="選んだウィンドウの送信画像" style="display:block;max-width:240px;max-height:125px;width:auto;height:auto;border-radius:4px;">
+        <figcaption id="phone-share-caption" class="hint"></figcaption>
+      </figure>
+      <div class="hint">話し始めに選んだ窓を1枚撮影して、その発言と一緒に送る。文字送信時も添付。画像は会話履歴に保存される。</div>
+    </div>
+    <div id="phone-text-row"><input id="phone-text" type="text" maxlength="10000" placeholder="通話中に文字で送る"><button id="phone-send-text">送る</button></div>
+    <div class="hint">F8はこのアプリを操作中に使える。読み上げ中に押すと声を止めて話せる。切断後の記憶・ログもいつものSOULに残る。</div>
+  </div>
+</div>
 <div id="toast"></div>
 
 <div id="context-menu"></div>
 
+<dialog id="tool-approval-dialog" aria-labelledby="tool-approval-title"
+  style="width:min(850px,90vw);max-height:85vh;padding:24px;border:1px solid #888;border-radius:12px;background:var(--bg,#fff);color:var(--fg,#111)">
+  <h3 id="tool-approval-title"></h3>
+  <p id="tool-approval-description" style="white-space:pre-wrap;overflow-wrap:anywhere"></p>
+  <pre id="tool-approval-preview" style="max-height:50vh;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;text-align:left;border:1px solid #888;padding:12px;user-select:text"></pre>
+  <p class="hint">この操作だけを許可します。3分間応答がない場合は実行しません。</p>
+  <div class="row">
+    <button id="tool-approval-deny" type="button" class="ghost">実行しない</button>
+    <button id="tool-approval-allow" type="button">この操作を許可</button>
+  </div>
+</dialog>
+
 <script>
+/* TOOL_APPROVAL_START: モデル出力は常に textContent。承認は単発IDにだけ返す。 */
+(function () {
+  var activeId = null;
+  var dialog = document.getElementById("tool-approval-dialog");
+  var allow = document.getElementById("tool-approval-allow");
+  var deny = document.getElementById("tool-approval-deny");
+  window.onToolApproval = function (request) {
+    if (dialog.open) throw new Error("別の操作を確認中です");
+    activeId = request.id;
+    document.getElementById("tool-approval-title").textContent = request.title;
+    document.getElementById("tool-approval-description").textContent = request.description;
+    document.getElementById("tool-approval-preview").textContent = request.preview;
+    allow.disabled = deny.disabled = false;
+    dialog.showModal();
+    deny.focus();
+  };
+  window.closeToolApproval = function (id) {
+    if (id !== activeId) return;
+    activeId = null;
+    if (dialog.open) dialog.close();
+  };
+  function resolve(approved) {
+    if (!activeId) return;
+    var id = activeId;
+    allow.disabled = deny.disabled = true;
+    window.pywebview.api.resolve_tool_approval(id, approved).then(function () {
+      window.closeToolApproval(id);
+    }).catch(function () {
+      // 送信失敗時も勝手に許可しない。再度「実行しない」を選べるようにする。
+      allow.disabled = true;
+      deny.disabled = false;
+    });
+  }
+  allow.addEventListener("click", function () { resolve(true); });
+  deny.addEventListener("click", function () { resolve(false); });
+  dialog.addEventListener("cancel", function (event) { event.preventDefault(); resolve(false); });
+})();
+/* TOOL_APPROVAL_END */
+
 /* MDRENDER_START — AI吹き出し用の自前Markdownパーサ。外部ライブラリ・CDN不使用。
    安全策: まずLLM出力全文をHTMLエスケープし、その後エスケープ済みテキストに対して
    正規表現でMD記法を検出し、こちらが生成したタグだけで組み立てる。生HTML/<script>タグは
@@ -1727,6 +1867,13 @@ function renderMarkdownToHtml(raw) {
     state.souls = data.souls || [];
     state.roles = data.roles || [];
     state.active_soul = data.active_soul;
+    if (data.call_status && (data.call_status.active || data.call_status.draining)) {
+      phoneLive = true;
+      phoneId = data.call_status.call_id;
+      $("phone-overlay").classList.add("open");
+      $("phone-close").style.display = "none";
+      window.onCallEvent(Object.assign({}, data.call_status, {kind:"state"}));
+    }
     state.active_role = data.active_role;
     state.fact_layer = data.fact_layer;
     state.theme = data.theme || "light";
@@ -2502,6 +2649,17 @@ function renderMarkdownToHtml(raw) {
     // break-btn・soul-name-labelと同様に送信中は無効化する。
     $("model-current").disabled = sending;
     if (sending) $("model-menu").classList.remove("open");
+    $("phone-start-btn").disabled = sending || phoneLive || !state.active_soul || !!runningJobName;
+    if (phoneLive) {
+      for (var j = 0; j < swBtns.length; j++) swBtns[j].disabled = true;
+      if (createBtn) createBtn.disabled = true;
+      $("soul-name-label").classList.add("disabled");
+      $("model-current").disabled = true;
+      $("break-btn").disabled = true;
+      $("compact-btn").disabled = true;
+      $("soul-menu").classList.remove("open");
+      $("model-menu").classList.remove("open");
+    }
   }
 
   function addOperations(afterRow, operations, openByDefault) {
@@ -2532,6 +2690,7 @@ function renderMarkdownToHtml(raw) {
   }
 
   function sendMessage() {
+    if (phoneLive) return;
     var box = $("input-box");
     var text = box.value.trim();
     var images = attachedImages.slice();
@@ -3041,7 +3200,7 @@ function renderMarkdownToHtml(raw) {
 
     var currentEntry = providers[llm.provider] || {};
     var currentEffort = currentEntry.reasoning_effort || "";
-    [["", "指定なし"], ["low", "low"], ["medium", "medium"], ["high", "high"]].forEach(function (pair) {
+    providerEffortOptions(currentEntry).forEach(function (pair) {
       var val = pair[0], text = pair[1];
       var isActive = val === currentEffort;
       var item = document.createElement("div");
@@ -4490,7 +4649,7 @@ function renderMarkdownToHtml(raw) {
     });
     var current = providers[llm.provider] || {};
     $("provider-model").value = current.model || "";
-    $("provider-effort").value = current.reasoning_effort || "";
+    renderProviderEffort(current);
     $("provider-toolmode").value = current.tool_mode || "";
     var isCustom = llm.provider === "custom";
     $("provider-baseurl-row").style.display = isCustom ? "" : "none";
@@ -4512,6 +4671,10 @@ function renderMarkdownToHtml(raw) {
     renderFallbackSelect(providers, labels, llm.provider, llm.fallback_provider || "");
     $("fallback-model").value = llm.fallback_model || "";
     $("web-search-checkbox").checked = llm.web_search === true;
+    $("web-search-backend").value = llm.web_search_backend || "auto";
+    var approvals = state.settings.tool_approvals || {};
+    $("auto-workspace-write").checked = approvals.workspace_write === "auto";
+    $("auto-web-search").checked = approvals.web_search === "auto";
     renderOauthCard(current.type);
   }
 
@@ -4550,9 +4713,10 @@ function renderMarkdownToHtml(raw) {
     $("context-limit-tokens").disabled = $("context-limit-tokens-unlimited").checked;
   });
 
-  $("web-search-checkbox").addEventListener("change", function () {
+  function saveWebSearchSettings() {
     var llm = JSON.parse(JSON.stringify(state.settings.llm || {}));
     llm.web_search = $("web-search-checkbox").checked;
+    llm.web_search_backend = $("web-search-backend").value;
     window.pywebview.api.save_settings({ llm: llm }).then(function (data) {
       state.settings = data;
       renderProviderCard();
@@ -4560,14 +4724,50 @@ function renderMarkdownToHtml(raw) {
     }).catch(function (err) {
       showToast("保存に失敗した: " + err, "error");
     });
-  });
+  }
+  $("web-search-checkbox").addEventListener("change", saveWebSearchSettings);
+  $("web-search-backend").addEventListener("change", saveWebSearchSettings);
+
+  function saveToolApprovalSettings() {
+    var policy = {
+      workspace_write: $("auto-workspace-write").checked ? "auto" : "ask",
+      web_search: $("auto-web-search").checked ? "auto" : "ask"
+    };
+    window.pywebview.api.save_settings({ tool_approvals: policy }).then(function (data) {
+      state.settings = data;
+      renderProviderCard();
+      showToast("自動実行の設定を保存した");
+    }).catch(function (err) {
+      showToast("保存に失敗した: " + err, "error");
+    });
+  }
+  $("auto-workspace-write").addEventListener("change", saveToolApprovalSettings);
+  $("auto-web-search").addEventListener("change", saveToolApprovalSettings);
+
+  function providerEffortOptions(entry) {
+    var options = [["", "指定なし"], ["low", "low"], ["medium", "medium"], ["high", "high"]];
+    if (entry.type === "anthropic") options.push(["xhigh", "xhigh"], ["max", "max"]);
+    return options;
+  }
+
+  function renderProviderEffort(entry) {
+    var select = $("provider-effort");
+    select.innerHTML = "";
+    providerEffortOptions(entry).forEach(function (pair) {
+      var option = document.createElement("option");
+      option.value = pair[0];
+      option.textContent = pair[1];
+      select.appendChild(option);
+    });
+    select.value = entry.reasoning_effort || "";
+  }
 
   $("provider-select").addEventListener("change", function () {
     var name = $("provider-select").value;
     var providers = (state.settings.llm || {}).providers || {};
     var current = providers[name] || {};
     $("provider-model").value = current.model || "";
-    $("provider-effort").value = current.reasoning_effort || "";
+    renderProviderEffort(current);
     $("provider-toolmode").value = current.tool_mode || "";
     var isCustom = name === "custom";
     $("provider-baseurl-row").style.display = isCustom ? "" : "none";
@@ -5047,6 +5247,7 @@ function renderMarkdownToHtml(raw) {
   // タブごとに呼ぶrenderをまとめる。各render関数側に既存の
   // `if (!state.settings) return;` ガードがあるので、ここでは二重にガードしない。
   var SETTINGS_TAB_RENDERERS = {
+    call: function () { renderCallSettings(); },
     soul: function () {
       renderSoulList();
       renderRoleList();
@@ -5165,6 +5366,273 @@ function renderMarkdownToHtml(raw) {
     });
   }
 
+  // PHONE_START: all voice/LLM text is rendered with textContent.
+  var phoneLive = false, phoneId = null, phoneMicMuted = false, phoneSpeakerMuted = false;
+  var phoneDraft = null, phoneDraftText = "";
+  var phoneShareEpoch = -1, phoneSentEpoch = -1;
+  var phonePhases = { outgoing: "呼び出し中…", listening: "聴いているよ — 話して、黙ると送信",
+    preparing: "音声認識を準備しているよ（初回のみ時間がかかる）",
+    ready: "録音ボタンかF8で話せるよ", paused: "マイクはミュート中", transcribing: "文字起こし中…",
+    thinking: "考え中…", speaking: "話しているよ — F8で声を止めて話せる", stopping: "返事を停止中…",
+    ending: "切断中…", ended: "通話を終了した" };
+
+  function phoneLine(name, text) {
+    var row = document.createElement("div");
+    row.className = "phone-line";
+    row.textContent = name + "：" + text;
+    $("phone-transcript").appendChild(row);
+    $("phone-transcript").scrollTop = $("phone-transcript").scrollHeight;
+    return row;
+  }
+
+  function phoneControls(payload) {
+    phoneMicMuted = !!payload.mic_muted;
+    phoneSpeakerMuted = !!payload.speaker_muted;
+    $("phone-status").textContent = phonePhases[payload.phase] || payload.phase;
+    $("phone-mic-mute").textContent = phoneMicMuted ? "マイクOFF" : "マイクON";
+    $("phone-speaker-mute").textContent = phoneSpeakerMuted ? "相手の声OFF" : "相手の声ON";
+    ["phone-record", "phone-mic-mute", "phone-speaker-mute", "phone-send-text"].forEach(function (id) {
+      $(id).disabled = !payload.active;
+    });
+    $("phone-hangup").disabled = !payload.active;
+    if (payload.phase === "preparing") $("phone-record").disabled = true;
+    $("phone-record").textContent = payload.phase === "listening" ? "🎙 今すぐ送信（F8）"
+      : payload.phase === "speaking" || payload.phase === "thinking" ? "✋ 止めて話す（F8）" : "🎙 録音（F8）";
+    ["phone-share-window", "phone-share-refresh", "phone-share-every", "phone-share-once", "phone-share-off"].forEach(function (id) {
+      $(id).disabled = !payload.active;
+    });
+    var share = payload.sharing;
+    if (share && share.epoch >= phoneShareEpoch) {
+      if (share.epoch !== phoneShareEpoch) clearPhonePreview();
+      phoneShareEpoch = share.epoch;
+      $("phone-share-status").textContent = share.mode === "every" ? "● 共有中：毎発言 — " + share.title
+        : share.mode === "once" ? "● 次の発言で共有 — " + share.title
+        : share.pending ? "● 今回の画像を送信待ち — " + share.title : "画面共有OFF";
+    }
+  }
+
+  function clearPhonePreview() {
+    $("phone-share-preview").style.display = "none";
+    $("phone-share-image").removeAttribute("src");
+    $("phone-share-caption").textContent = "";
+  }
+
+  function phoneShareMode(mode) {
+    return callAction("call_share_configure", {window:$("phone-share-window").value,mode:mode});
+  }
+
+  $("phone-share-refresh").addEventListener("click", function () {
+    var id = phoneId;
+    callAction("call_share_windows").then(function (result) {
+      if (result.error || !phoneLive || id !== phoneId) return;
+      var select = $("phone-share-window"), saved = select.value;
+      select.textContent = "";
+      var blank = document.createElement("option"); blank.value = ""; blank.textContent = "共有する窓を選ぶ"; select.appendChild(blank);
+      (result.windows || []).forEach(function (item) {
+        var option = document.createElement("option"); option.value = item.id; option.textContent = item.title; select.appendChild(option);
+      });
+      select.value = (result.windows || []).some(function (item) { return item.id === saved; }) ? saved : "";
+    });
+  });
+  $("phone-share-window").addEventListener("change", function () { phoneShareMode("off"); });
+  $("phone-share-every").addEventListener("click", function () { phoneShareMode("every"); });
+  $("phone-share-once").addEventListener("click", function () { phoneShareMode("once"); });
+  $("phone-share-off").addEventListener("click", function () { clearPhonePreview(); phoneShareMode("off"); });
+
+  window.onCallEvent = function (payload) {
+    if (!phoneLive || (phoneId && phoneId !== payload.call_id)) return;
+    phoneId = payload.call_id;
+    $("phone-name").textContent = payload.name + "と通話";
+    phoneControls(payload);
+    if (payload.kind === "setup") {
+      var total = payload.total || 0, received = payload.received || 0;
+      $("phone-notice").textContent = payload.text + (total ? " — " + Math.floor(received / 1048576) + " / " + Math.ceil(total / 1048576) + " MB" : "");
+      $("phone-setup-progress").style.display = total ? "" : "none";
+      if (total) $("phone-setup-progress").value = Math.min(100, received / total * 100);
+    } else if (payload.kind === "share_frame") {
+      var preview = payload.preview || {};
+      if (payload.epoch === phoneShareEpoch && preview.mime === "image/jpeg" && typeof preview.b64 === "string"
+          && preview.b64.length <= 3000000 && /^[A-Za-z0-9+/=]+$/.test(preview.b64)) {
+        $("phone-share-image").src = "data:image/jpeg;base64," + preview.b64;
+        $("phone-share-preview").style.display = "";
+        $("phone-share-caption").textContent = (phoneSentEpoch === payload.epoch ? "この発言に添付済み — " : "この発言に添付予定 — ") + payload.title;
+      }
+    } else if (payload.kind === "user") {
+      phoneDraft = null; phoneDraftText = "";
+      var shared = (payload.images || []).length > 0;
+      phoneLine("あなた", payload.text + (shared ? " 📷" : ""));
+      addBubble("user", payload.text, null, payload.images || []);
+      if (shared) {
+        phoneSentEpoch = phoneShareEpoch;
+        $("phone-share-caption").textContent = "この発言に添付済み — " + ((payload.sharing || {}).title || "");
+      }
+    } else if (payload.kind === "delta") {
+      if (!phoneDraft) phoneDraft = phoneLine(payload.name, "");
+      phoneDraftText += payload.text;
+      phoneDraft.textContent = payload.name + "：" + phoneDraftText;
+    } else if (payload.kind === "reply") {
+      var result = payload.result || {};
+      if (!phoneDraft) phoneDraft = phoneLine(payload.name, "");
+      phoneDraft.textContent = payload.name + "：" + (result.reply || "");
+      var chatRow = addBubble("assistant", result.reply || "");
+      addOperations(chatRow, result.operations || [], false);
+      if (result.active_role !== undefined) state.active_role = result.active_role;
+      renderRoleBar(); scrollChatToBottom();
+      phoneDraft = null; phoneDraftText = "";
+    } else if (payload.kind === "error" || payload.kind === "notice") {
+      $("phone-notice").textContent = payload.text;
+      if (payload.kind === "error" && phoneDraft) { phoneDraft.remove(); phoneDraft = null; phoneDraftText = ""; }
+    } else if (payload.kind === "tool") {
+      $("phone-status").textContent = payload.status === "web_search" ? "Webで検索中…" : "記憶・ツールを操作中…";
+    } else if (payload.kind === "stopped") {
+      if (phoneDraft) phoneDraft.remove();
+      phoneDraft = null; phoneDraftText = "";
+      $("phone-notice").textContent = "返事を止めたよ";
+      if ((payload.result || {}).operations && payload.result.operations.length) {
+        var stoppedRow = addBubble("assistant", "（通話の応答を停止した）");
+        addOperations(stoppedRow, payload.result.operations, true);
+      }
+    } else if (payload.kind === "ended") {
+      $("phone-setup-progress").style.display = "none";
+      phoneLive = false;
+      $("phone-close").style.display = "";
+      setComposeState();
+    }
+    $("phone-transcript").scrollTop = $("phone-transcript").scrollHeight;
+  };
+
+  $("phone-start-btn").addEventListener("click", function () {
+    if (sending || phoneLive || !state.active_soul) return;
+    phoneLive = true; phoneId = null; phoneDraft = null; phoneDraftText = "";
+    phoneShareEpoch = -1; phoneSentEpoch = -1; clearPhonePreview();
+    $("phone-share-status").textContent = "画面共有OFF";
+    $("phone-share-window").textContent = "";
+    $("phone-overlay").classList.add("open");
+    $("phone-transcript").textContent = "";
+    $("phone-notice").textContent = "";
+    $("phone-setup-progress").style.display = "none";
+    $("phone-close").style.display = "none";
+    $("phone-name").textContent = "電話";
+    $("phone-status").textContent = "呼び出し中…";
+    setComposeState();
+    window.pywebview.api.start_call().then(function (result) {
+      if (result.error) throw new Error(result.error);
+      // A fast preflight failure may already have emitted ended before this reply.
+      if (phoneLive && (!phoneId || phoneId === result.call_id)) {
+        phoneId = result.call_id;
+        phoneControls(result);
+      }
+    }).catch(function (err) {
+      phoneLive = false;
+      $("phone-status").textContent = "通話を開始できなかった";
+      $("phone-notice").textContent = String(err.message || err);
+      $("phone-close").style.display = "";
+      setComposeState();
+    });
+  });
+  function callAction(method, argument) {
+    var request = argument === undefined ? window.pywebview.api[method]() : window.pywebview.api[method](argument);
+    return request.then(function (result) {
+      if (result.error) $("phone-notice").textContent = result.error;
+      return result;
+    }).catch(function () { $("phone-notice").textContent = "通話の操作に失敗した"; return {error:true}; });
+  }
+  $("phone-record").addEventListener("click", function () { callAction("call_record"); });
+  $("phone-mic-mute").addEventListener("click", function () { callAction("call_mic_mute", !phoneMicMuted); });
+  $("phone-speaker-mute").addEventListener("click", function () { callAction("call_speaker_mute", !phoneSpeakerMuted); });
+  $("phone-hangup").addEventListener("click", function () { callAction("end_call"); });
+  $("phone-close").addEventListener("click", function () {
+    if (!phoneLive) { $("phone-overlay").classList.remove("open"); phoneId = null; $("phone-start-btn").focus(); }
+  });
+  function sendPhoneText() {
+    var value = $("phone-text").value.trim();
+    if (!value || !phoneLive) return;
+    callAction("call_send_text", value).then(function (result) { if (!result.error) $("phone-text").value = ""; });
+  }
+  $("phone-send-text").addEventListener("click", sendPhoneText);
+  $("phone-text").addEventListener("keydown", function (event) {
+    if (event.key === "Enter" && !event.isComposing) { event.preventDefault(); sendPhoneText(); }
+  });
+  document.addEventListener("keydown", function (event) {
+    if (phoneLive && event.key === "F8" && !event.repeat && !$("phone-record").disabled && !document.querySelector("dialog[open]")) {
+      event.preventDefault(); callAction("call_record");
+    }
+  });
+
+  function renderCallSettings() {
+    if (!state.settings) return;
+    var cfg = state.settings.call || {};
+    [["call-stt-dir", "stt_dir"], ["call-stt-model", "stt_model"], ["call-threads", "threads"],
+     ["call-silence", "silence_seconds"], ["call-threshold", "silence_threshold"],
+     ["call-gain", "input_gain"], ["call-voice", "voice"]].forEach(function (pair) { $(pair[0]).value = cfg[pair[1]]; });
+    $("call-hands-free").checked = cfg.hands_free !== false;
+    ["input", "output"].forEach(function (kind) { renderCallDevices(kind, [], cfg[kind + "_device"]); });
+    var souls = $("call-voice-soul"); souls.textContent = "";
+    state.souls.forEach(function (soul) {
+      var option = document.createElement("option"); option.value = soul.id; option.textContent = soul.name;
+      souls.appendChild(option);
+    });
+    souls.value = state.active_soul || "";
+    renderCallSoulSpeaker();
+    window.pywebview.api.call_stt_status().then(function (result) {
+      $("call-stt-status").textContent = result.ready ? result.source + "を検出済み。すぐ通話を始められるよ"
+        : "電話すると音声認識を自動で取得・準備する（初回約1.6GB）";
+    }).catch(function () { $("call-stt-status").textContent = "電話開始時に音声認識を自動で準備する"; });
+  }
+  $("call-auto-stt").addEventListener("click", function () {
+    $("call-stt-dir").value = "";
+    $("call-stt-model").value = "ggml-large-v3-turbo.bin";
+    $("call-save-settings").click();
+  });
+  function renderCallSoulSpeaker() {
+    var cfg = (state.settings || {}).call || {};
+    var voice = (cfg.soul_speakers || {})[$("call-voice-soul").value];
+    $("call-soul-speaker").value = voice == null ? "" : voice;
+  }
+  $("call-voice-soul").addEventListener("change", renderCallSoulSpeaker);
+  function renderCallDevices(kind, devices, selected) {
+    var select = $("call-" + kind + "-device"); select.textContent = "";
+    var normal = document.createElement("option"); normal.value = ""; normal.textContent = "Windowsの既定"; select.appendChild(normal);
+    if (selected != null && !devices.some(function (d) { return d.id === selected; })) devices.push({id:selected,name:"保存済みデバイス " + selected});
+    devices.forEach(function (device) { var option = document.createElement("option"); option.value = device.id; option.textContent = device.name; select.appendChild(option); });
+    select.value = selected == null ? "" : selected;
+  }
+  $("call-devices-btn").addEventListener("click", function () {
+    window.pywebview.api.call_audio_devices().then(function (result) {
+      if (result.error) { $("call-settings-status").textContent = result.error; return; }
+      ["input", "output"].forEach(function (kind) {
+        var saved = $("call-" + kind + "-device").value;
+        renderCallDevices(kind, result[kind] || [], saved === "" ? null : Number(saved));
+      });
+    });
+  });
+  $("call-pick-stt").addEventListener("click", function () {
+    window.pywebview.api.pick_stt_folder().then(function (result) {
+      if (result.error) { $("call-settings-status").textContent = result.error; return; }
+      if (!result.ok) return;
+      $("call-stt-dir").value = result.path;
+      var choices = $("call-stt-models"); choices.textContent = "";
+      result.models.forEach(function (model) { var option = document.createElement("option"); option.value = model; choices.appendChild(option); });
+      if (result.models.length && result.models.indexOf($("call-stt-model").value) === -1) $("call-stt-model").value = result.models[0];
+    });
+  });
+  $("call-save-settings").addEventListener("click", function () {
+    var cfg = JSON.parse(JSON.stringify((state.settings || {}).call || {}));
+    cfg.stt_dir = $("call-stt-dir").value.trim(); cfg.stt_model = $("call-stt-model").value.trim();
+    cfg.threads = Number($("call-threads").value); cfg.hands_free = $("call-hands-free").checked;
+    cfg.silence_seconds = Number($("call-silence").value); cfg.silence_threshold = Number($("call-threshold").value);
+    cfg.input_gain = Number($("call-gain").value); cfg.voice = $("call-voice").value;
+    ["input", "output"].forEach(function (kind) { var value = $("call-" + kind + "-device").value; cfg[kind + "_device"] = value === "" ? null : Number(value); });
+    var sid = $("call-voice-soul").value, speaker = $("call-soul-speaker").value;
+    cfg.soul_speakers = cfg.soul_speakers || {};
+    if (sid && speaker !== "") cfg.soul_speakers[sid] = Number(speaker);
+    else if (sid) delete cfg.soul_speakers[sid];
+    window.pywebview.api.save_settings({call:cfg}).then(function (result) {
+      state.settings = result;
+      $("call-settings-status").textContent = result.error || "通話設定を保存した";
+    });
+  });
+  // PHONE_END
   window.addEventListener("pywebviewready", boot);
 })();
 </script>

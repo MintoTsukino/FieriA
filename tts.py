@@ -15,6 +15,7 @@ Noneのままとなり、play_wav_async/stopは静かに無効化される。
 import json
 import os
 import re
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -30,6 +31,8 @@ _MD_LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 _MD_SYMBOL_RE = re.compile(r"[#*`]")
 _URL_RE = re.compile(r"https?://\S+")
 _TRAILING_RULE_RE = re.compile(r"-{3,}\s*$")
+_PLAY_LOCK = threading.RLock()
+_PLAY_GENERATION = 0
 
 
 def prepare_text(text, limit=600):
@@ -108,15 +111,21 @@ def play_wav_async(wav_bytes):
 
 def stop():
     """再生停止。winsound無し環境では何もしない。"""
-    if winsound is None:
-        return
-    winsound.PlaySound(None, winsound.SND_PURGE)
+    global _PLAY_GENERATION
+    with _PLAY_LOCK:
+        _PLAY_GENERATION += 1
+        if winsound is not None:
+            winsound.PlaySound(None, winsound.SND_PURGE)
 
 
-def speak(cfg_tts, text):
+def speak(cfg_tts, text, cancelled=None):
     """設定→前処理→合成→再生を束ねる高レベル関数。例外はすべて内部で握ってFalseを返す
     ——読み上げの失敗で会話体験を絶対に壊さないため（Global Constraints）。"""
     try:
+        with _PLAY_LOCK:
+            generation = _PLAY_GENERATION
+        if cancelled and cancelled():
+            return False
         if not cfg_tts.get("enabled"):
             return False
         prepared = prepare_text(text)
@@ -128,7 +137,10 @@ def speak(cfg_tts, text):
             cfg_tts.get("speaker", 0),
             speed=cfg_tts.get("speed", 1.0),
         )
-        return play_wav_async(wav)
+        with _PLAY_LOCK:
+            if generation != _PLAY_GENERATION or (cancelled and cancelled()):
+                return False
+            return play_wav_async(wav)
     except Exception:
         return False
 

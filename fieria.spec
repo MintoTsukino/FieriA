@@ -20,17 +20,20 @@
 # 6.21.0 + pyinstaller-hooks-contrib 2026.6で実機確認済み）だが、暗黙のcontribフックだけに
 # 頼るのは将来のフック仕様変更に弱いため、ここでも明示的にcollect_dynamic_libsを呼んで
 # binariesへ追加しておく（二重に集めても同じ内容なのでビルド結果は変わらない）。
-from PyInstaller.utils.hooks import collect_dynamic_libs
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
 
 pdfium_binaries = collect_dynamic_libs("pypdfium2_raw")
+audio_binaries = collect_dynamic_libs("_sounddevice_data")
+audio_data = collect_data_files("_sounddevice_data", includes=["portaudio-binaries/README.md"])
 
 a = Analysis(
     ["entry.py"],   # gui.py 直でなく entry.py 経由（Mark of the Web 除去を先に走らせる）
     pathex=[],
-    binaries=pdfium_binaries,
+    binaries=pdfium_binaries + audio_binaries,
     datas=[
         ("ui", "ui"),
-    ],
+        ("stt_assets.json", "."),
+    ] + audio_data,
     hiddenimports=[
         # pywebview の Windows バックエンド（動的importなので明示する）
         "webview.platforms.edgechromium",
@@ -38,6 +41,9 @@ a = Analysis(
         # pypdfium2はgui.render_pdf内で遅延import。frozen時の動的import検出漏れ対策として明示
         "pypdfium2",
         "pypdfium2_raw",
+        "numpy",
+        "sounddevice",
+        "_sounddevice_data",
     ],
     hookspath=[],
     hooksconfig={},

@@ -254,7 +254,7 @@ def test_build_provider_ignores_web_search_for_openai_compat():
     assert not hasattr(provider, "web_search")
 
 
-def test_create_llm_reads_web_search_from_llm_cfg():
+def test_create_llm_disables_provider_native_search_even_when_enabled():
     cfg = {
         "provider": "gemini",
         "fallback_provider": "",
@@ -267,7 +267,7 @@ def test_create_llm_reads_web_search_from_llm_cfg():
     }
     created = llm.create_llm(cfg, {})
     assert isinstance(created, llm.GeminiLLM)
-    assert created.web_search is True
+    assert created.web_search is False
 
 
 def test_create_llm_web_search_defaults_to_false_when_absent():
@@ -285,8 +285,8 @@ def test_create_llm_web_search_defaults_to_false_when_absent():
     assert created.web_search is False
 
 
-def test_create_llm_applies_web_search_to_fallback_provider_too():
-    """web_searchはllm直下のグローバルトグルなので、フォールバック側にも同じ値が渡る。"""
+def test_create_llm_disables_unreviewable_search_in_fallback_too():
+    """フォールバックも確認を迂回するプロバイダ内蔵検索を使わない。"""
     cfg = {
         "provider": "opencode_zen",
         "fallback_provider": "gemini",
@@ -301,7 +301,7 @@ def test_create_llm_applies_web_search_to_fallback_provider_too():
     }
     created = llm.create_llm(cfg, {})
     assert isinstance(created, llm.FallbackLLM)
-    assert created.fallback.web_search is True
+    assert created.fallback.web_search is False
 
 
 def test_sources_block_includes_search_queries_when_present():

@@ -20,6 +20,13 @@ import soul as soul_mod
 
 MAX_TOOL_ROUNDS = 2
 
+VOICE_CONTEXT = ("いまは音声通話です。ユーザー発言は音声の文字起こしで、誤認識が混じることが"
+                 "あります。曖昧な固有名詞や重要な操作は必要に応じて確かめてください。"
+                 "返答は話し言葉で短めに区切り、相手が話す余白を残してください。"
+                 "長いコードやURLは画面へ載せ、口頭で延々と読み上げないでください。"
+                 "『（通話を開始した）』はアプリの接続通知です。その時は短く自然に挨拶して"
+                 "相手の発話を待ってください。会話・記憶・操作の規範は通常どおりです。")
+
 # 記憶書き込みツール未使用のままこのターン数が過ぎたら、書き促しの一行を
 # システムプロンプトへ注入する（memory_tools.MEMORY_WRITE_TOOLS参照）。
 MEMORY_WRITE_NUDGE_TURNS = 10
@@ -123,12 +130,17 @@ def _estimate_tokens(messages):
 
 
 class Engine:
-    def __init__(self, cfg, llm, soul_id):
+    def __init__(self, cfg, llm, soul_id, approve_tool=None, search_plan_factory=None):
+        self._approve_callback = approve_tool
+        self._search_plan_factory = search_plan_factory
+        self._denied_actions = set()
         self.cfg = cfg
         self.llm = llm
         self.soul_id = soul_id
         self.messages = []  # [{"role": "user"|"assistant", "content": str}]
         self._stop_requested = False
+        self._external_cancel = None
+        self._voice_mode = False
         # 記憶の書き促し: 記憶書き込みツールを使わないままターンが続いたら、
         # システム側から一行注入して「残すべきことはないか」を突つく
         # （実機フィードバック 2026-07-23: 促さないと自分から書かない問題への対処。
@@ -144,6 +156,20 @@ class Engine:
         # Engineインスタンスは以後ずっとフェンス経路固定（_use_native_tools参照）——
         # 同じエンドポイントに毎ターン拒否されるツール定義を送り直しても無駄なため。
         self._native_broken = False
+
+    @property
+    def _stop_requested(self):
+        if getattr(self, "_stop_flag", False):
+            return True
+        callback = getattr(self, "_external_cancel", None)
+        try:
+            return bool(callback and callback())
+        except Exception:
+            return True
+
+    @_stop_requested.setter
+    def _stop_requested(self, value):
+        self._stop_flag = bool(value)
 
     def request_stop(self):
         """考え中の応答を止めたい、というUI側からの要求を受け付ける。
@@ -215,6 +241,8 @@ class Engine:
         閾値と無関係に実行する。停止直後は_stop_requestedがTrueのまま残っている
         （process_turnの冒頭でしかリセットされない）ため、手動実行では明示的に
         下ろしてから呼ぶ——ユーザーがボタンを押した意思の方が新しい。"""
+        self._external_cancel = None
+        self._voice_mode = False
         self._stop_requested = False
         return self._compact()
 
@@ -293,6 +321,8 @@ class Engine:
         chat_stream自体が例外を送出した場合はここで握らずそのまま呼び出し元へ
         伝播させる——蓄積済みの部分テキストがあってもターン全体を失敗として扱う
         既存chat()失敗時の処理（履歴ロールバック）に委ねるため。"""
+        if self._stop_requested:
+            raise _TurnStopped()
         messages = [{"role": "system", "content": system_text}] + self.messages
         if on_delta is None or not hasattr(self.llm, "chat_stream"):
             return self.llm.chat(messages)
@@ -349,6 +379,8 @@ class Engine:
         tools_spec = memory_tools.build_tools_spec(self.cfg, self.soul_id)
         system_text = prompt_mod.build_system_text(
             self.cfg, self.soul_id, tools_spec=tools_spec)
+        if self._voice_mode:
+            system_text += "\n\n" + VOICE_CONTEXT
         if recall_block:
             system_text += "\n\n" + recall_block
         return system_text
@@ -394,6 +426,8 @@ class Engine:
         reply = ""
         any_tool_call = False
         for _ in range(MAX_TOOL_ROUNDS + 1):
+            if self._stop_requested:
+                raise _TurnStopped()
             messages = [{"role": "system", "content": system_text}] + self.messages + exchange
             if use_stream:
                 result = self.llm.chat_tools_stream(
@@ -422,10 +456,12 @@ class Engine:
                     op = {"ok": False, "op": name, "detail": "引数のJSONが壊れていた"}
                 else:
                     op = memory_tools.execute(
-                        self.soul_id, {"tool": name, **args}, self.cfg)
+                        self.soul_id, {**args, "tool": name}, self.cfg, approve=self._approve_tool,
+                        search_plan_factory=self._search_plan_factory,
+                        is_cancelled=lambda: self._stop_requested)
                 operations.append(op)
                 round_ops.append(op)
-            exchange.append({
+            assistant_message = {
                 "role": "assistant",
                 "content": text or None,
                 "tool_calls": [
@@ -435,10 +471,19 @@ class Engine:
                                       c.get("arguments") or {}, ensure_ascii=False)}}
                     for c in calls
                 ],
-            })
+            }
+            # 署名付き思考ブロック等はテキストから再構築できない。現在のツール往復
+            # だけでプロバイダへ返し、永続ログ・次ターン・他プロバイダには持ち越さない。
+            if result.get("provider_content") is not None:
+                assistant_message["provider_content"] = result["provider_content"]
+            exchange.append(assistant_message)
             for c, op in zip(calls, round_ops):
-                exchange.append({"role": "tool", "tool_call_id": c.get("id") or "",
-                                  "content": f"{'ok' if op['ok'] else 'error'}: {op['detail']}"})
+                tool_message = {"role": "tool", "tool_call_id": c.get("id") or "",
+                                "content": f"{'ok' if op['ok'] else 'error'}: {op['detail']}",
+                                "is_error": not op["ok"]}
+                if op.get("attachments"):
+                    tool_message["images"] = op["attachments"]
+                exchange.append(tool_message)
             reply = text
             if self._stop_requested:
                 raise _TurnStopped()
@@ -457,6 +502,8 @@ class Engine:
         reply = ""
         any_tool_call = False
         for i in range(MAX_TOOL_ROUNDS + 1):
+            if self._stop_requested:
+                raise _TurnStopped()
             if i > 0:
                 system_text = self._build_fence_system_text(recall_block)
             raw = self._call_llm(system_text, on_delta)
@@ -483,8 +530,13 @@ class Engine:
                         "（システム: fieria-toolブロックのJSONが壊れていて実行できなかった。"
                         f"同じ内容を正しいJSON1個のブロックで書き直すこと。壊れていた断片: {snippet}）")
                     continue
-                result = memory_tools.execute(self.soul_id, call, self.cfg)
+                result = memory_tools.execute(self.soul_id, call, self.cfg, approve=self._approve_tool,
+                                              search_plan_factory=self._search_plan_factory,
+                                              is_cancelled=lambda: self._stop_requested)
                 operations.append(result)
+                if not result["ok"] and call.get("tool") in ("write_doc", "append_doc", "web_search"):
+                    read_results.append("操作は実行されなかった: " + result["detail"] +
+                                        "。同じ操作を別の手段で試さず、相手に伝えてください。")
                 if call.get("tool") in memory_tools.FEEDBACK_TOOLS and result["ok"]:
                     label = call.get("path") or call.get("query") or call.get("tool")
                     read_results.append(f"[{label}]\n{result['detail']}")
@@ -503,7 +555,19 @@ class Engine:
             raise _TurnStopped()
         return reply, any_tool_call
 
-    def process_turn(self, user_text, images=None, on_delta=None, on_status=None):
+    def _approve_tool(self, request):
+        fingerprint = json.dumps(request, ensure_ascii=False, sort_keys=True)
+        if self._stop_requested or fingerprint in self._denied_actions or self._approve_callback is None:
+            return False
+        try:
+            approved = self._approve_callback(request) is True
+        except Exception:
+            approved = False
+        if not approved:
+            self._denied_actions.add(fingerprint)
+        return approved and not self._stop_requested
+
+    def process_turn(self, user_text, images=None, on_delta=None, on_status=None, voice=False, cancelled=None):
         """user_text: ユーザー発言。images: [{"mime", "b64"}, ...]（省略/None可、後方互換）。
         添付があれば各画像をsoul.save_attachmentでファイル保存し、ログにはb64を含めず
         相対パス参照だけを残す。LLMへ渡すself.messages側のuserメッセージには実画像
@@ -520,8 +584,13 @@ class Engine:
         （既に下でこの関数内で1回だけappend済み）フェンス経路で同じターンを
         やり直す——「ユーザー発言・履歴を失わない、二重append_logもしない」という
         ブリーフの要求を、userメッセージ追加をパス分岐より前に1回だけ行う構造で満たす。"""
+        self._external_cancel = cancelled
+        self._voice_mode = bool(voice)
         self._stop_requested = False
+        self._denied_actions.clear()
         operations = []
+        if self._stop_requested:
+            return self._stopped_result(len(self.messages), operations)
 
         # 今回の注入対象リマインダをターン開始時点で確定させる（soul.due_remindersは
         # prompt.build_system_textも内部で同じ関数を呼んでいるので、ここで別途
@@ -547,6 +616,8 @@ class Engine:
         # ため作り直す理由がない）。
         if use_native:
             system_text = prompt_mod.build_system_text(self.cfg, self.soul_id, tools_spec="")
+            if self._voice_mode:
+                system_text += "\n\n" + VOICE_CONTEXT
             system_text += "\n\n" + memory_tools.NATIVE_SPEC_NOTE
             if recall_block:
                 system_text += "\n\n" + recall_block

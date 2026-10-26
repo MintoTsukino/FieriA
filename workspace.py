@@ -6,6 +6,7 @@ soul.pyの_safe_pathと同方式のトラバーサル拒否に加え、拡張子
 限定する（作業フォルダに秘密ファイル・実行ファイルが置かれていても触れない安全弁）。
 """
 import os
+import stat
 
 import config
 
@@ -36,16 +37,39 @@ def _is_inside_fieria_home(full_path):
     到達も実パス解決で検知する。_resolve_safe_path（read/write系）と
     _iter_listable_files（list_docs/search_workspace系）の両方から呼ぶ共通判定
     （2026-08-02: 一覧・検索がfieria_home到達拒否から漏れていたレビュー指摘の修正）。"""
-    real_full = os.path.realpath(full_path)
-    real_home = os.path.realpath(config.HOME)
-    return real_full == real_home or real_full.startswith(real_home + os.sep)
+    return _is_within(full_path, config.HOME)
+
+
+def _is_within(path, directory):
+    path = os.path.normcase(os.path.realpath(path))
+    directory = os.path.normcase(os.path.realpath(directory))
+    try:
+        return os.path.commonpath([path, directory]) == directory
+    except ValueError:
+        return False
+
+
+def _reject_links(base, full):
+    """指定されたルート自体は実体へ解決する。配下の別名・再解析ポイントは拒否。"""
+    current = base
+    for part in os.path.relpath(full, base).split(os.sep):
+        current = os.path.join(current, part)
+        try:
+            info = os.lstat(current)
+        except FileNotFoundError:
+            continue  # 新規ファイル/親ディレクトリは作成可能
+        if (stat.S_ISLNK(info.st_mode) or
+                getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+            raise ValueError("作業フォルダ内のリンク・ジャンクションには触れない")
+        if stat.S_ISREG(info.st_mode) and info.st_nlink > 1:
+            raise ValueError("複数の場所で共有されるハードリンクには触れない")
 
 
 def _resolve_safe_path(workspace_dir, rel_path):
     """コロン拒否・隠しパス拒否・トラバーサル拒否・機密名拒否・fieria_home到達拒否の
     共通検査（拡張子検査はしない）。_safe_path（テキスト系）とread_pdf_bytes（.pdf限定）
     の両方から使う。"""
-    base = os.path.abspath(workspace_dir)
+    base = os.path.realpath(os.path.abspath(workspace_dir))
     # rel_pathは常に相対パスのはずなので、コロンが含まれる時点で不正とみなす。
     # （NTFS代替データストリーム "hidden.exe:x.md" は拡張子チェックを文字列末尾一致で
     #  すり抜けつつ実体は"hidden.exe"を作ってしまうため／ドライブ絶対パスでの脱出も同時に塞ぐ。
@@ -60,6 +84,9 @@ def _resolve_safe_path(workspace_dir, rel_path):
     full = os.path.abspath(os.path.join(base, rel_path))
     if not full.startswith(base + os.sep) and full != base:
         raise ValueError(f"作業フォルダの外は触れない: {rel_path}")
+    if not _is_within(full, base):
+        raise ValueError(f"作業フォルダの外は触れない: {rel_path}")
+    _reject_links(base, full)
     # .json解禁に伴う安全弁: OAuth/秘密鍵/認証情報っぽい名前のファイルが作業フォルダに
     # 置かれていても読み書きさせない（.envは拡張子検査で既に弾かれている）。
     if _is_sensitive_name(os.path.basename(full)):
@@ -110,12 +137,17 @@ def _iter_listable_files(base, state=None):
     「yield数がMAX_LIST_FILESに達したか」を見て打ち切りを検知すること
     （list_docsの既存挙動＝到達した時点で打ち切りとみなす、を踏襲）。
     state（_FileWalkStateインスタンス）を渡すと、打ち切り発生時にstate.truncated=Trueが立つ。"""
+    base = os.path.realpath(base)
     count = 0
     for root, dirs, files in os.walk(base):
-        dirs[:] = [
-            d for d in dirs
-            if not d.startswith(".") and not _is_inside_fieria_home(os.path.join(root, d))
-        ]  # 隠しフォルダに加え、fieria_home（シンボリックリンク/ジャンクション経由含む）へ
+        safe_dirs = []
+        for d in dirs:
+            try:
+                _resolve_safe_path(base, os.path.relpath(os.path.join(root, d), base))
+                safe_dirs.append(d)
+            except (ValueError, OSError):
+                pass
+        dirs[:] = safe_dirs  # 隠しフォルダ・リンク・範囲外を枝刈りする
         # 到達するサブフォルダもここで枝刈りする（_resolve_safe_pathのHOME到達拒否と対称。
         # 2026-08-02: 一覧・検索がread/writeと非対称に内部データを漏らしていたレビュー指摘の修正）
         rel_root = os.path.relpath(root, base)
@@ -128,9 +160,10 @@ def _iter_listable_files(base, state=None):
             if f.lower().endswith(LISTABLE_EXTS):
                 if _is_sensitive_name(f):
                     continue  # _resolve_safe_pathの機密名拒否と対称（見せない・触らせない）
-                full = os.path.join(root, f)
-                if _is_inside_fieria_home(full):
-                    continue  # 個々のファイル単位でも二重に確認（実パス解決の取りこぼし対策）
+                try:
+                    full = _resolve_safe_path(base, os.path.relpath(os.path.join(root, f), base))
+                except (ValueError, OSError):
+                    continue
                 rel = os.path.relpath(full, base).replace("\\", "/")
                 yield rel, full
                 count += 1
@@ -310,9 +343,10 @@ def write_doc(workspace_dir, rel_path, content):
     直前版を<name>.bak（1世代・上書き）へ退避してから書き込む。"""
     full = _safe_path(workspace_dir, rel_path)
     if os.path.isfile(full):
+        backup = _resolve_safe_path(workspace_dir, rel_path + ".bak")
         with open(full, "r", encoding="utf-8") as f:
             previous = f.read()
-        with open(full + ".bak", "w", encoding="utf-8") as f:
+        with open(backup, "w", encoding="utf-8") as f:
             f.write(previous)
     os.makedirs(os.path.dirname(full), exist_ok=True)
     with open(full, "w", encoding="utf-8") as f:

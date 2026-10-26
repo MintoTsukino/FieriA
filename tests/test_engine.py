@@ -577,8 +577,9 @@ def test_stop_during_tool_round_rolls_back_read_diff_before_second_reply(monkeyp
 
     orig_execute = memory_tools.execute
 
-    def stopping_execute(soul_id, call, cfg=None):
-        result = orig_execute(soul_id, call, cfg)
+    def stopping_execute(soul_id, call, cfg=None, approve=None, search_plan_factory=None, is_cancelled=None):
+        result = orig_execute(soul_id, call, cfg, approve=approve,
+                              search_plan_factory=search_plan_factory, is_cancelled=is_cancelled)
         eng.request_stop()  # ツール実行完了直後（read差し戻し前）に停止要求
         return result
 
@@ -590,7 +591,7 @@ def test_stop_during_tool_round_rolls_back_read_diff_before_second_reply(monkeyp
     assert out["stopped"] is True
     assert out["reply"] == ""
     assert len(eng.messages) == before_len
-    assert len(fake.calls) == 2  # 差し戻し後の2回目chatは実行されたが、結果は破棄された
+    assert len(fake.calls) == 1  # 停止要求後は次のAPI呼び出し自体を開始しない
     log = soul.read_today_log(sid)
     assert [e["who"] for e in log] == ["user"]  # AIログは書かれていない
 
@@ -895,7 +896,7 @@ def test_read_pdf_tool_feeds_back_attachments_as_images(monkeypatch):
 
     fake_attachment = {"mime": "application/pdf", "b64": "ZmFrZS1wZGYtYnl0ZXM="}
 
-    def fake_execute(soul_id, call, cfg=None):
+    def fake_execute(soul_id, call, cfg=None, approve=None, search_plan_factory=None, is_cancelled=None):
         return {"ok": True, "op": "read_pdf", "detail": "資料.pdf を添付した（Gemini直読み・0.01MB）",
                 "attachments": [fake_attachment]}
 

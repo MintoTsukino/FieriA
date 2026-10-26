@@ -241,7 +241,7 @@ def test_write_doc_writes_content_via_execute(tmp_path):
     import memory_tools as mt
     sid = _sid()
     r = mt.execute(sid, {"tool": "write_doc", "path": "a.md", "content": "書いた"},
-                   {"workspace_dir": str(tmp_path)})
+                   {"workspace_dir": str(tmp_path)}, approve=lambda request: True)
     assert r["ok"]
     assert (tmp_path / "a.md").read_text(encoding="utf-8") == "書いた"
 
@@ -252,7 +252,7 @@ def test_append_doc_appends_content_via_execute(tmp_path):
     sid = _sid()
     workspace.write_doc(str(tmp_path), "a.md", "1行目\n")
     r = mt.execute(sid, {"tool": "append_doc", "path": "a.md", "content": "2行目\n"},
-                   {"workspace_dir": str(tmp_path)})
+                   {"workspace_dir": str(tmp_path)}, approve=lambda request: True)
     assert r["ok"]
     assert (tmp_path / "a.md").read_text(encoding="utf-8") == "1行目\n2行目\n"
 
@@ -1609,7 +1609,8 @@ def test_web_search_dispatch_returns_formatted_results(monkeypatch):
     monkeypatch.setattr(
         websearch, "search_text",
         lambda query, max_results=5: {"ok": True, "results": fake_results, "detail": "1件"})
-    r = mt.execute(sid, {"tool": "web_search", "query": "猫の飼い方"})
+    r = mt.execute(sid, {"tool": "web_search", "query": "猫の飼い方"},
+                   {"llm": {"web_search": True}}, approve=lambda request: True)
     assert r["ok"] is True
     assert r["op"] == "web_search"
     assert "タイトル" in r["detail"]
@@ -1624,7 +1625,8 @@ def test_web_search_dispatch_zero_results_uses_fixed_detail(monkeypatch):
     monkeypatch.setattr(
         websearch, "search_text",
         lambda query, max_results=5: {"ok": True, "results": [], "detail": "0件"})
-    r = mt.execute(sid, {"tool": "web_search", "query": "猫の飼い方"})
+    r = mt.execute(sid, {"tool": "web_search", "query": "猫の飼い方"},
+                   {"llm": {"web_search": True}}, approve=lambda request: True)
     assert r["ok"] is True
     assert r["detail"] == "検索結果0件"
 
@@ -1636,7 +1638,8 @@ def test_web_search_dispatch_failure_passes_through_detail(monkeypatch):
     monkeypatch.setattr(
         websearch, "search_text",
         lambda query, max_results=5: {"ok": False, "results": [], "detail": "検索に失敗しました: boom"})
-    r = mt.execute(sid, {"tool": "web_search", "query": "猫の飼い方"})
+    r = mt.execute(sid, {"tool": "web_search", "query": "猫の飼い方"},
+                   {"llm": {"web_search": True}}, approve=lambda request: True)
     assert r["ok"] is False
     assert r["op"] == "web_search"
     assert r["detail"] == "検索に失敗しました: boom"
@@ -1663,12 +1666,12 @@ def test_build_tools_spec_omits_web_search_when_off():
     assert "web_search" not in spec
 
 
-def test_build_tools_spec_omits_web_search_for_gemini():
+def test_build_tools_spec_includes_approved_web_search_for_gemini():
     import memory_tools as mt
     cfg = {"llm": {"web_search": True, "provider": "g",
                     "providers": {"g": {"type": "gemini"}}}}
     spec = mt.build_tools_spec(cfg)
-    assert "web_search" not in spec
+    assert "web_search" in spec
 
 
 def test_build_tools_spec_includes_web_search_for_non_gemini():
@@ -1684,14 +1687,13 @@ def test_web_search_not_in_importer_allowed_tools():
     assert "web_search" not in importer.ALLOWED_TOOLS
 
 
-def test_build_tools_spec_omits_web_search_for_codex_oauth():
-    """Codex(openai_codex_oauth)はネイティブWeb検索(tools:[{"type":"web_search"}])に
-    切り替えたので、アプリ内蔵web_searchツールは索引に出さない(geminiと同じ扱い)。"""
+def test_build_tools_spec_includes_approved_web_search_for_codex_oauth():
+    """Codexも送信前の確認が可能なアプリ側検索を使う。"""
     import memory_tools as mt
     cfg = {"llm": {"web_search": True, "provider": "codex",
                     "providers": {"codex": {"type": "openai_codex_oauth"}}}}
     spec = mt.build_tools_spec(cfg)
-    assert "web_search" not in spec
+    assert "web_search" in spec
 
 
 # --- フェンス無しの裸JSONもツール呼び出しとして拾う 2026-08-03 ---
@@ -1847,14 +1849,13 @@ def test_native_tools_role_gated_by_auto_role_switch():
 
 
 def test_native_tools_web_search_same_gating_as_fence():
-    """web_searchの条件はbuild_tools_specと同一: llm.web_search ONかつ
-    プロバイダtypeがgemini/openai_codex_oauth以外。"""
+    """全プロバイダでllm.web_search ONなら確認付き検索を提示する。"""
     on = {"llm": {"web_search": True, "provider": "d",
                    "providers": {"d": {"type": "deepseek"}}}}
     off_gemini = {"llm": {"web_search": True, "provider": "g",
                            "providers": {"g": {"type": "gemini"}}}}
     assert "web_search" in _native_names(on)
-    assert "web_search" not in _native_names(off_gemini)
+    assert "web_search" in _native_names(off_gemini)
     assert "web_search" not in _native_names({})
 
 

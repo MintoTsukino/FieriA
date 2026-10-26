@@ -13,19 +13,22 @@ import zipfile
 import webview
 
 import config as config_mod
+import call_session
 import embed as embed_mod
 import importer
 import memory_tools
+import websearch
 import prompt as prompt_mod
 import roles as roles_mod
 import search as search_mod
 import soul as soul_mod
 import tasks_store
+from tool_permissions import ApprovalBroker
 import tts as tts_mod
 import wrapup as wrapup_mod
 from engine import Engine
 from env import delete_key, load_env, set_key
-from llm import REASONING_EFFORTS, build_provider, create_llm
+from llm import build_provider, create_llm, reasoning_efforts_for
 import scheduler as scheduler_mod
 from scheduler import JOBS, Scheduler
 
@@ -138,6 +141,9 @@ def _is_symlink_zip_entry(info):
 
 class Bridge:
     def __init__(self):
+        self._call = None
+        self._tts_generation = 0
+        self._approvals = ApprovalBroker()
         self._cfg = config_mod.load_config()
         self._env = load_env()
         self._llm = None
@@ -177,6 +183,8 @@ class Bridge:
         self._start_embedding_indexer(self._cfg.get("active_soul"))
 
     def _ensure_engine(self):
+        if self._call_running():
+            return
         if not self._cfg.get("active_soul"):
             souls = soul_mod.list_souls()
             if souls:
@@ -185,7 +193,9 @@ class Bridge:
         if self._cfg.get("active_soul"):
             active_soul = self._cfg["active_soul"]
             self._llm = create_llm(self._effective_llm_cfg(active_soul), self._env)
-            self._engine = Engine(self._cfg, self._llm, active_soul)
+            self._engine = Engine(self._cfg, self._llm, active_soul,
+                                  approve_tool=self._approve_tool,
+                                  search_plan_factory=self._make_search_plan)
             restore_turns = self._cfg.get("restore_turns", 50)
             if restore_turns:
                 self._engine.restore_today(restore_turns)
@@ -262,6 +272,7 @@ class Bridge:
     def boot(self):
         active_soul = self._cfg.get("active_soul")
         return {
+            "call_status": self.call_status(),
             "souls": soul_mod.list_souls(),
             "roles": roles_mod.list_roles(),
             "active_soul": active_soul,
@@ -292,6 +303,8 @@ class Bridge:
         }
 
     def send_message(self, text, images=None):
+        if self._call_running():
+            return {"error": "通話中は通話画面の文字欄から送ってね"}
         if self._importing:
             return {"error": "インポート処理中は会話できない（完了かキャンセルを待って）"}
         # 定期処理（日記・あらすじ等）の実行中は会話を受けない。同じSOULの記憶へ
@@ -325,6 +338,8 @@ class Bridge:
             # ターン開始を確定する直前にロック下で再チェックする（start_import側と対）。
             if self._importing:
                 return {"error": "インポート処理中は会話できない（完了かキャンセルを待って）"}
+            if self._busy_turns:
+                return {"error": "前の会話が終わるまで待ってね"}
             self._busy_turns += 1
         try:
             result = self._engine.process_turn(text, images=images, on_delta=on_delta,
@@ -345,6 +360,114 @@ class Bridge:
             # インクリメントと対になるデクリメントは必ずfinallyで行う。
             with self._busy_lock:
                 self._busy_turns -= 1
+
+    # --- 通話。通話全体で会話エンジンの利用権を1つ確保する。 ---
+    def _call_running(self):
+        session = getattr(self, "_call", None)
+        return bool(session and (session.snapshot()["active"] or session.snapshot()["draining"]))
+
+    def start_call(self):
+        with self._busy_lock:
+            if self._busy_turns or self._importing or self._scheduler.is_running_job():
+                return {"error": "会話・インポート・定期処理が終わってから電話してね"}
+            if not self._engine or not self._cfg.get("active_soul"):
+                return {"error": "先にSOULを作成・選択してね"}
+            if not self._scheduler.reserve_for_call():
+                return {"error": "定期処理が終わってから電話してね"}
+            sid = self._cfg["active_soul"]
+            name = next((s["name"] for s in soul_mod.list_souls() if s["id"] == sid), sid)
+            try:
+                session = call_session.CallSession(
+                    self._engine, self._cfg.get("call", {}), self._cfg.get("tts", {}), sid, name,
+                    self._push_call_event, self._call_finished, self._approvals.cancel_all)
+            except Exception:
+                self._scheduler.release_call()
+                return {"error": "通話設定を読み込めなかった。設定 → 通話を確認してね"}
+            self._call = session
+            self._busy_turns += 1
+        try:
+            self.tts_stop()
+            session.start()
+        except Exception:
+            self._call = None
+            self._call_finished()
+            return {"error": "通話を開始できなかった。音声の設定を確認してね"}
+        return {"ok": True, **session.snapshot()}
+
+    def _call_finished(self):
+        with self._busy_lock:
+            self._busy_turns = max(0, self._busy_turns - 1)
+            self._scheduler.release_call()
+
+    def _push_call_event(self, payload):
+        window = getattr(self, "_window", None)
+        if window:
+            try:
+                window.evaluate_js("window.onCallEvent && window.onCallEvent(" +
+                                   json.dumps(payload, ensure_ascii=True) + ")")
+                return True
+            except Exception:
+                return False
+        return False
+
+    def call_status(self):
+        return self._call.snapshot() if self._call else {"phase": "idle", "active": False, "draining": False}
+
+    def end_call(self):
+        if self._call_running():
+            self._call.end()
+        return {"ok": True}
+
+    def call_record(self):
+        return self._call.toggle_record() if self._call_running() else {"error": "通話中ではないよ"}
+
+    def call_send_text(self, text):
+        return self._call.send_text(text) if self._call_running() else {"error": "通話中ではないよ"}
+
+    def call_mic_mute(self, muted):
+        return self._call.mute_mic(muted) if self._call_running() else {"error": "通話中ではないよ"}
+
+    def call_speaker_mute(self, muted):
+        return self._call.mute_speaker(muted) if self._call_running() else {"error": "通話中ではないよ"}
+
+    def call_share_windows(self):
+        return self._call.share_windows() if self._call_running() else {"error": "通話中ではないよ"}
+
+    def call_share_configure(self, options):
+        return self._call.share_configure(options) if self._call_running() else {"error": "通話中ではないよ"}
+
+    def call_audio_devices(self):
+        try:
+            from call_audio import list_devices
+            return {"ok": True, **list_devices()}
+        except Exception:
+            return {"error": "音声デバイスを取得できなかった。Windowsのマイク権限・接続を確認してね"}
+
+    def call_stt_status(self):
+        """Read-only detection. Downloads happen only after the phone button."""
+        import call_setup
+
+        cfg = self._cfg.get("call", {})
+        runtime = call_setup.discover(cfg.get("stt_dir", ""), cfg.get("stt_model", call_setup.ASSETS["model"]["name"]))
+        return {"ready": runtime is not None, "source": runtime.source if runtime else "",
+                "path": str(runtime.directory) if runtime else "",
+                "download_bytes": call_setup.ASSETS["model"]["size"] + call_setup.ASSETS["runtime"]["size"]}
+
+    def pick_stt_folder(self):
+        if self._call_running():
+            return {"error": "通話を終えてから変更してね"}
+        window = getattr(self, "_window", None)
+        if not window:
+            return {"cancelled": True}
+        selected = window.create_file_dialog(webview.FOLDER_DIALOG)
+        if not selected:
+            return {"cancelled": True}
+        folder = selected[0]
+        models = sorted(name for name in os.listdir(folder) if name.lower().endswith(".bin") and
+                        os.path.isfile(os.path.join(folder, name)))
+        if not os.path.isfile(os.path.join(folder, "whisper-cli.exe")):
+            return {"error": "whisper-cli.exeが入っているフォルダを選んでね"}
+        return {"ok": True, "path": folder, "models": models}
 
     def is_llm_busy(self):
         """終了確認ダイアログ(on_closing)用: チャット応答中、またはスケジューラの
@@ -412,12 +535,32 @@ class Bridge:
         except Exception:
             pass
 
+    def _make_search_plan(self):
+        return websearch.make_search_plan(
+            self._effective_llm_cfg(self._cfg.get("active_soul")), self._env)
+
+    def _approve_tool(self, request):
+        if not self._window:
+            return False
+        window = self._window
+        return self._approvals.request(
+            request,
+            lambda payload: window.evaluate_js(
+                "window.onToolApproval(" + json.dumps(payload, ensure_ascii=True) + ")"),
+            lambda request_id: window.evaluate_js(
+                "window.closeToolApproval(" + json.dumps(request_id) + ")"),
+        )
+
+    def resolve_tool_approval(self, request_id, approved):
+        return {"ok": self._approvals.resolve(request_id, approved)}
+
     def stop_turn(self):
         """考え中の応答を止める。pywebviewは各API呼び出しを別スレッドで走らせるため、
         send_message実行中でもこの呼び出しは並行して届く。engineが無ければ何もしない。"""
         if not self._engine:
             return {"ok": False}
         self._engine.request_stop()
+        self._approvals.cancel_all()
         return {"ok": True}
 
     def insert_break(self):
@@ -438,6 +581,8 @@ class Bridge:
         （割り切り。理論上は競合しうるが、区切りは「ログに残るだけ」の非破壊操作
         なので最悪でも壊れるのは表示上の一貫性だけで、データが失われることはない）。
         """
+        if self._call_running():
+            return {"ok": False, "error": "通話を終えてから区切ってね"}
         if not self._engine:
             return {"ok": False}
         soul_mod.append_break(self._cfg["active_soul"])
@@ -500,6 +645,8 @@ class Bridge:
 
     # --- SOUL ---
     def create_soul(self, name, identity_text, speech_style="", inherit_user_from=None):
+        if self._call_running():
+            return {"error": "通話を終えてからSOULを作成してね"}
         """新規SOULを作る。inherit_user_from（既存soul_id）を指定すると、そのSOULの
         user.md（相手理解）を1回だけコピーして引き継ぐ（soul_mod.create_soul参照）。
         省略時はNoneのまま渡す＝従来どおり空のuser.mdで始まる（後方互換）。
@@ -550,6 +697,8 @@ class Bridge:
     def switch_soul(self, soul_id):
         if not self._soul_exists(soul_id):
             return {"error": "SOULが見つからない", **self.boot()}
+        if self.is_llm_busy():
+            return {"error": "応答・操作の確認中はSOULを切り替えられません"}
         self._maybe_wrapup()
         self._cfg["active_soul"] = soul_id
         config_mod.save_config(self._cfg)
@@ -574,6 +723,7 @@ class Bridge:
     # --- 設定 ---
     def get_settings(self):
         return {
+            "call": copy.deepcopy(self._cfg.get("call", config_mod.DEFAULT_CONFIG["call"])),
             "llm": sanitize_llm_cfg(self._cfg["llm"]),
             "fact_layer": self._cfg["fact_layer"],
             "fact_layer_overrides": self._cfg.get("fact_layer_overrides", {}),
@@ -584,6 +734,7 @@ class Bridge:
             "wrapup_on_close": self._cfg.get("wrapup_on_close", False),
             "context_limit_tokens": self._cfg.get("context_limit_tokens", 0),
             "workspace_dir": self._cfg.get("workspace_dir", ""),
+            "tool_approvals": copy.deepcopy(self._cfg.get("tool_approvals", {})),
             "auto_role_switch": self._cfg.get("auto_role_switch", True),
             "auto_recall": self._cfg.get("auto_recall", {"enabled": True, "max_hits": 3}),
             "skill_auto_create": self._cfg.get("skill_auto_create", False),
@@ -600,6 +751,20 @@ class Bridge:
         }
 
     def save_settings(self, payload):
+        if self._call_running():
+            return {**self.get_settings(), "error": "通話を終えてから設定を変更してね"}
+        if "call" in payload:
+            self._cfg["call"] = call_session.normalize_settings(payload["call"], self._cfg.get("call"))
+        if "tool_approvals" in payload:
+            requested = payload["tool_approvals"]
+            current = self._cfg.get("tool_approvals", {})
+            current = current if isinstance(current, dict) else {}
+            self._cfg["tool_approvals"] = {
+                kind: (requested.get(kind, current.get(kind, "ask"))
+                       if isinstance(requested, dict) and
+                       requested.get(kind, current.get(kind, "ask")) in ("ask", "auto") else "ask")
+                for kind in ("workspace_write", "web_search")
+            }
         if "fact_layer" in payload:
             self._cfg["fact_layer"] = payload["fact_layer"]
         if "llm" in payload:
@@ -607,11 +772,13 @@ class Bridge:
             # FieriA拡張: Web検索。llm全体をJSから丸ごと差し替える既存パターンに乗るが、
             # 型はJS側の保証に委ねず（auto_role_switch等と同様）ここで確定させる。
             self._cfg["llm"]["web_search"] = bool(self._cfg["llm"].get("web_search", False))
+            backend = self._cfg["llm"].get("web_search_backend", "auto")
+            self._cfg["llm"]["web_search_backend"] = backend if backend in websearch.SEARCH_BACKENDS else "auto"
             # 推論エフォート: プロバイダentryごと。GUI/JS由来の値をここで確定させる
             for entry in self._cfg["llm"].get("providers", {}).values():
                 if isinstance(entry, dict):
                     val = str(entry.get("reasoning_effort", "") or "").strip().lower()
-                    entry["reasoning_effort"] = val if val in REASONING_EFFORTS else ""
+                    entry["reasoning_effort"] = val if val in reasoning_efforts_for(entry) else ""
                     # ツール呼び出し方式: プロバイダentryごと。不正・空・autoはキーごと落とす(=auto)
                     tm = str(entry.get("tool_mode", "") or "").strip().lower()
                     if tm in ("native", "fence"):
@@ -748,10 +915,15 @@ class Bridge:
         同じ非同期発火）。連打時は直前の再生が新しい再生で置き換わる
         （winsound.PlaySound(SND_MEMORY|SND_ASYNC)の挙動任せ・スレッド管理不要、
         tts.play_wav_asyncのdocstring参照）。"""
+        if self._call_running():
+            return {"ok": False}
         cfg_tts = self._cfg.get("tts", {})
         if not cfg_tts.get("enabled"):
             return {"ok": False}
-        threading.Thread(target=tts_mod.speak, args=(cfg_tts, text), daemon=True).start()
+        generation = self._tts_generation
+        threading.Thread(target=tts_mod.speak, args=(cfg_tts, text), kwargs={
+            "cancelled": lambda: self._call_running() or generation != self._tts_generation,
+        }, daemon=True).start()
         return {"ok": True}
 
     # --- セマンティック検索（Ollama埋め込み） ---
@@ -784,6 +956,7 @@ class Bridge:
         """再生停止。tts.stop自体は例外を出さない実装だが、他のstop系ブリッジ
         （stop_turn等）と同じ「失敗しても会話を壊さない」方針に揃えて念のため握る。"""
         try:
+            self._tts_generation += 1
             tts_mod.stop()
         except Exception:
             pass
@@ -804,6 +977,8 @@ class Bridge:
             }
 
     def tts_test(self, text="読み上げのテストだよ"):
+        if self._call_running():
+            return {"ok": False, "error": "通話を終えてから試してね"}
         """設定画面のテスト再生用。tts_speakと異なりenabledを無視して即合成・再生し、
         結果を同期で返す。Global Constraints記載どおり、テスト再生だけは失敗を
         呼び出し側（設定画面）に表示してよいため、speak()のように例外を握りつぶさず
@@ -910,12 +1085,16 @@ class Bridge:
         return out
 
     def save_api_key(self, env_key, value):
+        if self._call_running():
+            return {"error": "通話を終えてからAPIキーを変更してね"}
         set_key(env_key, value.strip())
         self._env = load_env()
         self._ensure_engine()
         return {"ok": True}
 
     def delete_api_key(self, env_key):
+        if self._call_running():
+            return {"error": "通話を終えてからAPIキーを変更してね"}
         delete_key(env_key)
         self._env = load_env()
         self._ensure_engine()
@@ -1546,6 +1725,15 @@ class Bridge:
 
     # --- 終了 ---
     def end_session(self):
+        session = self._call
+        if self._call_running():
+            session.end()
+            session.join(timeout=8)
+            if session.snapshot().get("draining"):
+                return {"ok": True}  # Do not start diary writing beside a draining call.
+        self._approvals.cancel_all()
+        if self._engine:
+            self._engine.request_stop()
         self._maybe_wrapup()
         return {"ok": True}
 
